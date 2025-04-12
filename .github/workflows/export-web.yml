@@ -2,14 +2,12 @@ name: Export Expo Web
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
+    branches: [main]
 
 jobs:
-  export-web:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,10 +22,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Export web build
-        run: npx expo export:web
+      - name: Build static web export
+        run: npm run export:web
 
-      - name: Upload static web export
+      - name: Upload web files
         uses: actions/upload-artifact@v3
         with:
           name: expo-web
