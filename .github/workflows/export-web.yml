@@ -7,6 +7,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front-end
+
     steps:
       - uses: actions/checkout@v3
 
@@ -14,11 +18,11 @@ jobs:
         with:
           node-version: 18
 
-      - run: npm ci
+      - run: npm install
 
       - run: npm run export:web
 
       - uses: actions/upload-artifact@v4
         with:
           name: expo-web
-          path: dist/
+          path: front-end/dist/
