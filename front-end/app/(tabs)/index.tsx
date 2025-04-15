@@ -495,9 +495,15 @@ function CumplimientoScreen() {
     fetch(`${API_BASE}/cumplimiento`)
       .then(res => res.json())
       .then(data => {
-        setCumplimiento(data);
+        if (Array.isArray(data)) {
+          setCumplimiento(data);
+        } else {
+          console.error("Error: respuesta inesperada de cumplimiento", data);
+          setCumplimiento([]); // prevenir crash
+        }
         setRefreshing(false);
       })
+      
       .catch(err => {
         console.error(err);
         setRefreshing(false);
@@ -791,85 +797,8 @@ export default function App() {
 
 // ----------------- Estilos -----------------
 // Añadir estos estilos al objeto styles existente en index.tsx
-const ayudantesStyles = {
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#999',
-    textAlign: 'center',
-  },
-  ayudantesRow: {
-    justifyContent: 'space-between',
-    marginBottom: 15,
-  },
-  ayudanteCard: {
-    width: '48%',
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 15,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-    marginBottom: 15,
-  },
-  avatarContainer: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#f0f0f0',
-    marginBottom: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  avatarImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    position: 'absolute',
-  },
-  avatarFallback: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#1890ff',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarInitials: {
-    color: 'white',
-    fontSize: 40,
-    fontWeight: 'bold',
-  },
-  ayudanteNombre: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  ayudanteApellido: {
-    fontSize: 16,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
-  ayudanteEntrada: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 5,
-  },
-};
-
-// Asegúrate de incorporar estos estilos al objeto styles principal
-// const styles = StyleSheet.create({...existingStyles, ...ayudantesStyles});
 const styles = StyleSheet.create({
+  // ---------- Estilos Generales ----------
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
@@ -953,6 +882,98 @@ const styles = StyleSheet.create({
     color: '#1890ff',
     fontStyle: 'italic',
   },
+  expirationText: {
+    marginTop: 10,
+    color: '#999',
+    fontStyle: 'italic',
+  },
+  lastUpdate: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#999',
+    marginTop: 10,
+  },
+
+  // ---------- Estilos Ayudantes ----------
+  ayudantesRow: {
+    justifyContent: 'space-between',
+    marginBottom: 15,
+  },
+  ayudanteCard: {
+    width: '48%',
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 15,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    marginBottom: 15,
+  },
+  avatarContainer: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#f0f0f0',
+    marginBottom: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  avatarImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 2, // ✅ Imagen encima del fallback
+  },
+  avatarFallback: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#1890ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  avatarInitials: {
+    color: 'white',
+    fontSize: 40,
+    fontWeight: 'bold',
+  },
+  ayudanteNombre: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  ayudanteApellido: {
+    fontSize: 16,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  ayudanteEntrada: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 5,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
+  },
+
+  // ---------- Otros estilos (Registros, Cumplimiento, Horas, etc.) ----------
   filterContainer: {
     marginBottom: 10,
     maxHeight: 50,
@@ -994,12 +1015,6 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
     fontWeight: '500',
-  },
-  lastUpdate: {
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#999',
-    marginTop: 10,
   },
   viewToggle: {
     flexDirection: 'row',
@@ -1096,7 +1111,6 @@ const styles = StyleSheet.create({
   bloqueEstado: {
     fontWeight: '500',
   },
-  // Añadir estos estilos al objeto styles existente
   sortButtons: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -1160,6 +1174,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
-
-  
+  noScheduleText: {
+    fontStyle: 'italic',
+    color: '#757575',
+    marginTop: 8,
+  },
 });
