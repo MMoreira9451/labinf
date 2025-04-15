@@ -179,6 +179,52 @@ def registros_hoy():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+@app.route('/ayudantes_presentes', methods=['GET'])
+def ayudantes_presentes():
+    """
+    Get list of assistants currently in the laboratory
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Get current date
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # Find users who have entered but not exited the lab
+        # (odd number of registrations today)
+        query = """
+        SELECT u.nombre, u.apellido, u.email, MAX(r.hora) as ultima_hora
+        FROM usuarios_permitidos u
+        JOIN registros r ON u.email = r.email
+        WHERE r.fecha = ?
+        GROUP BY u.email
+        HAVING COUNT(*) % 2 = 1
+        ORDER BY u.nombre
+        """
+        
+        cursor.execute(query, (today,))
+        
+        ayudantes = []
+        for row in cursor.fetchall():
+            nombre, apellido, email, ultima_hora = row
+            # Generate a consistent hash for the email to use as avatar placeholder
+            email_hash = hash(email) % 1000  # Using modulo to limit the range
+            
+            ayudantes.append({
+                "nombre": nombre,
+                "apellido": apellido,
+                "email": email,
+                "ultima_entrada": ultima_hora,
+                "foto_url": f"/api/placeholder/{email_hash}/200"  # Placeholder image based on email hash
+            })
+        
+        conn.close()
+        return jsonify(ayudantes), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/cumplimiento', methods=['GET'])
 def cumplimiento():
