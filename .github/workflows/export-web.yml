@@ -1,4 +1,4 @@
-name: Export Expo Web
+name: Build static web files
 
 on:
   push:
@@ -7,22 +7,24 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: front-end
 
     steps:
-      - uses: actions/checkout@v3
+    - name: Checkout repo
+      uses: actions/checkout@v3
 
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 18
+    - name: Setup Node
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
 
-      - run: npm install
+    - name: Install dependencies
+      run: npm install
 
-      - run: npm run export:web
+    - name: Build Expo web
+      run: npx expo export:web
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: expo-web
-          path: front-end/dist/
+    - name: Upload dist/ as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: expo-web-dist
+        path: dist
