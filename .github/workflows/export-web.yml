@@ -12,19 +12,25 @@ jobs:
     - name: Checkout repo
       uses: actions/checkout@v3
 
-    - name: Setup Node
+    - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
         node-version: 18
 
     - name: Install dependencies
-      run: npm install
+      run: npm ci
 
-    - name: Build Expo web
+    - name: Install Expo CLI
+      run: npm install -g expo-cli
+
+    - name: Set EXPO_PUBLIC env variables
+      run: echo 'EXPO_PUBLIC_ENV=production' >> $GITHUB_ENV
+
+    - name: Export Expo Web
       run: npx expo export:web
 
-    - name: Upload dist/ as artifact
-      uses: actions/upload-artifact@v3.1.2
+    - name: Upload web build (dist/) as artifact
+      uses: actions/upload-artifact@v3
       with:
         name: expo-web-dist
         path: dist
