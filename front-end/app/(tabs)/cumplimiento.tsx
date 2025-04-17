@@ -5,7 +5,7 @@ import { Platform } from 'react-native';
 
 const API_BASE = Platform.OS === 'web'
   ? 'http://10.0.5.63:5000'
-  : 'http://10.0.5.63:8081';
+  : 'http://10.0.5.123:8081';
 
 export default function CumplimientoScreen() {
   const [cumplimiento, setCumplimiento] = useState([]);
@@ -41,18 +41,21 @@ export default function CumplimientoScreen() {
     cumpliendo: cumplimiento.filter(item => item.estado === 'Cumpliendo').length,
     incompleto: cumplimiento.filter(item => item.estado === 'Incompleto').length,
     ausente: cumplimiento.filter(item => item.estado === 'Ausente').length,
-    retrasado: cumplimiento.filter(item => item.estado === 'Retrasado').length,
+    atrasado: cumplimiento.filter(item => item.estado === 'Atrasado').length,
+    pendiente: cumplimiento.filter(item => item.estado === 'Pendiente').length,
     noAplica: cumplimiento.filter(item => item.estado === 'No Aplica').length,
   };
 
   const getStatusColor = (estado) => {
     switch (estado) {
-      case 'Cumpliendo': return '#4CAF50';
-      case 'Incompleto': return '#FF9800';
-      case 'Ausente': return '#F44336';
-      case 'Retrasado': return '#FFC107';
-      case 'No Aplica': return '#9E9E9E';
-      default: return '#9E9E9E';
+      case 'Cumpliendo': return '#4CAF50';  // Green
+      case 'Cumplido': return '#4CAF50';    // Green (for completed blocks)
+      case 'Incompleto': return '#FF9800';  // Orange
+      case 'Ausente': return '#F44336';     // Red
+      case 'Atrasado': return '#FFC107';    // Yellow
+      case 'Pendiente': return '#2196F3';   // Blue
+      case 'No Aplica': return '#9E9E9E';   // Grey
+      default: return '#9E9E9E';            // Grey
     }
   };
 
@@ -65,13 +68,13 @@ export default function CumplimientoScreen() {
           style={[styles.toggleButton, view === 'resumen' && styles.toggleActive]}
           onPress={() => setView('resumen')}
         >
-          <Text style={styles.toggleText}>Resumen</Text>
+          <Text style={[styles.toggleText, view === 'resumen' && styles.toggleActiveText]}>Resumen</Text>
         </TouchableOpacity>
         <TouchableOpacity 
           style={[styles.toggleButton, view === 'detalle' && styles.toggleActive]}
           onPress={() => setView('detalle')}
         >
-          <Text style={styles.toggleText}>Detalle</Text>
+          <Text style={[styles.toggleText, view === 'detalle' && styles.toggleActiveText]}>Detalle</Text>
         </TouchableOpacity>
       </View>
 
@@ -85,7 +88,8 @@ export default function CumplimientoScreen() {
                   key === 'cumpliendo' ? 'Cumpliendo' :
                   key === 'incompleto' ? 'Incompleto' :
                   key === 'ausente' ? 'Ausente' :
-                  key === 'retrasado' ? 'Retrasado' :
+                  key === 'atrasado' ? 'Atrasado' :
+                  key === 'pendiente' ? 'Pendiente' :
                   key === 'noAplica' ? 'No aplica' : key
                 }</Text>
                 <View style={[styles.statusIndicator, { backgroundColor: getStatusColor(key.charAt(0).toUpperCase() + key.slice(1)) }]} />
@@ -108,7 +112,12 @@ export default function CumplimientoScreen() {
                   {item.bloques.map((bloque, idx) => (
                     <View key={idx} style={styles.bloqueItem}>
                       <Text style={styles.bloqueHora}>{bloque.inicio} - {bloque.fin}</Text>
-                      <Text style={styles.bloqueEstado}>{bloque.estado || 'Pendiente'}</Text>
+                      <Text style={[
+                        styles.bloqueEstado, 
+                        { color: getStatusColor(bloque.estado || 'Pendiente') }
+                      ]}>
+                        {bloque.estado || 'Pendiente'}
+                      </Text>
                     </View>
                   ))}
                 </View>
@@ -158,6 +167,9 @@ const styles = StyleSheet.create({
   },
   toggleText: {
     color: '#333',
+  },
+  toggleActiveText: {
+    color: 'white',
   },
   statsContainer: {
     flexDirection: 'row',
