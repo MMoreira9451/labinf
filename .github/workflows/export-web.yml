@@ -8,6 +8,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: front-end
+
     steps:
     - name: Checkout repo
       uses: actions/checkout@v3
@@ -18,19 +22,16 @@ jobs:
         node-version: 18
 
     - name: Install dependencies
-      run: npm ci
+      run: npm install
 
     - name: Install Expo CLI
       run: npm install -g expo-cli
 
-    - name: Set EXPO_PUBLIC env variables
-      run: echo 'EXPO_PUBLIC_ENV=production' >> $GITHUB_ENV
-
-    - name: Export Expo Web
-      run: npx expo export:web
+    - name: Export Expo Web (modern bundler)
+      run: npx expo export --platform web
 
     - name: Upload web build (dist/) as artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: expo-web-dist
-        path: dist
+        path: front-end/dist
