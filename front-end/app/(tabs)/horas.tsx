@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Platform } from 'react-native';
 
 const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.5.123:5000'
+  ? 'http://127.0.0.1:5000'
   : 'http://10.0.5.63:8081';
 
 export default function HorasAcumuladasScreen() {
