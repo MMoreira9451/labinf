@@ -4,7 +4,7 @@ import { StyleSheet, Text, View, FlatList, RefreshControl, TouchableOpacity, Scr
 import { Platform } from 'react-native';
 
 const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.5.123:5000'
+  ? 'http://127.0.0.1:5000'
   : 'http://10.0.5.63:8081';
 
 export default function RegistrosScreen() {
