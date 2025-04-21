@@ -1,755 +1,624 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-import sqlite3
-from datetime import datetime, time, timedelta
-import pytz
-import os
+import pymysql
+from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
+import json
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
-# Database configuration
-DB_PATH = "registro_qr.db"
+# Clase para manejar la serialización de objetos datetime y timedelta
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, timedelta):
+            # Convertir timedelta a segundos
+            return str(obj)
+        return super().default(obj)
 
-def init_db():
-    """Initialize the database with required tables if they don't exist."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Create usuarios_permitidos table (allowed users)
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS usuarios_permitidos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        apellido TEXT NOT NULL,
-        email TEXT NOT NULL UNIQUE,
-        activo BOOLEAN DEFAULT 1
-    )
-    ''')
-    
-    # Create registros table (attendance logs)
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS registros (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        fecha TEXT NOT NULL,
-        hora TEXT NOT NULL,
-        dia TEXT NOT NULL,
-        nombre TEXT NOT NULL,
-        apellido TEXT NOT NULL,
-        email TEXT NOT NULL,
-        timestamp INTEGER DEFAULT (strftime('%s', 'now'))
-    )
-    ''')
-    
-    # Create horarios_asignados table (assigned schedules)
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS horarios_asignados (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        usuario_id INTEGER NOT NULL,
-        dia TEXT NOT NULL,
-        hora_entrada TEXT NOT NULL,
-        hora_salida TEXT NOT NULL,
-        FOREIGN KEY (usuario_id) REFERENCES usuarios_permitidos (id)
-    )
-    ''')
-    
-    # Insert sample data if the tables are empty
-    
-# Initialize the database on startup
-init_db()
+# Configurar Flask para usar nuestro encoder personalizado
+from flask.json.provider import JSONProvider
 
-@app.route('/registrar_qr', methods=['POST'])
-def registrar_qr():
-    """
-    Register a QR code scan, validating the user and creating attendance record
-    """
+class CustomJSONProvider(JSONProvider):
+    def dumps(self, obj, **kwargs):
+        return json.dumps(obj, cls=CustomJSONEncoder, **kwargs)
+    
+    def loads(self, s, **kwargs):
+        return json.loads(s, **kwargs)
+
+app.json_provider_class = CustomJSONProvider
+app.json = CustomJSONProvider(app)
+
+# --- CONFIGURACIÓN DE CONEXIÓN ---
+DB_CONFIG = {
+    'host': '10.0.5.194',  # Actualizado a la nueva IP
+    'user': 'qruser',
+    'password': 'tu_password_segura',
+    'database': 'registro_qr',
+    'port': 3306,
+    "charset": "utf8mb4",
+    "cursorclass": pymysql.cursors.DictCursor
+}
+
+def get_connection():
+    return pymysql.connect(**DB_CONFIG)
+
+# --- ENDPOINT: Obtener todos los registros ---
+@app.route('/registros', methods=['GET'])
+def get_registros():
     try:
-        data = request.json
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM registros ORDER BY fecha DESC, hora DESC")
+            registros = cursor.fetchall()
+            
+            # Convertir manualmente cualquier valor problemático
+            for reg in registros:
+                for key, value in reg.items():
+                    # Convertir datetime a string si es necesario
+                    if isinstance(value, datetime):
+                        reg[key] = value.isoformat()
+                    # Convertir timedelta a string si es necesario
+                    elif isinstance(value, timedelta):
+                        reg[key] = str(value)
         
-        # Extract user data from request
-        nombre = data.get('name', '')
-        apellido = data.get('surname', '')
-        email = data.get('email', '')
-        
-        if not (nombre and apellido and email):
-            return jsonify({"success": False, "message": "Datos incompletos"}), 400
-        
-        # Check if user is authorized
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "SELECT id FROM usuarios_permitidos WHERE email = ? AND activo = 1",
-            (email,)
-        )
-        user_result = cursor.fetchone()
-        
-        if not user_result:
-            conn.close()
-            return jsonify({"success": False, "message": "Usuario no autorizado"}), 403
-        
-        user_id = user_result[0]
-        
-        # Get current date and time
-        now = datetime.now()
-        fecha = now.strftime("%Y-%m-%d")
-        hora = now.strftime("%H:%M:%S")
-        dia = now.strftime("%A")  # Day of week in English
-        
-        # Insert attendance record
-        cursor.execute('''
-            INSERT INTO registros (fecha, hora, dia, nombre, apellido, email)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (fecha, hora, dia, nombre, apellido, email))
-        
-        conn.commit()
-        registro_id = cursor.lastrowid
         conn.close()
-        
-        # Determine if this is entry or exit
-        tipo = determinar_tipo_registro(email)
-        
-        return jsonify({
-            "success": True,
-            "message": f"Registro exitoso: {nombre} {apellido}",
-            "id": registro_id,
-            "fecha": fecha,
-            "hora": hora,
-            "tipo": tipo
-        }), 201
-        
+        return jsonify(registros)
     except Exception as e:
-        return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
+        print(f"Error en get_registros: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
-def determinar_tipo_registro(email):
-    """
-    Determine if this registration is an entry or exit based on previous records
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Get current date
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Count today's records for this user
-    cursor.execute('''
-        SELECT COUNT(*) FROM registros 
-        WHERE email = ? AND fecha = ?
-    ''', (email, today))
-    
-    count = cursor.fetchone()[0]
-    conn.close()
-    
-    # Even counts (including 0) are entries, odd counts are exits
-    return "Entrada" if count % 2 == 0 else "Salida"
-
+# --- ENDPOINT: Registros de Hoy ---
+# --- ENDPOINT: Registros de Hoy ---
 @app.route('/registros_hoy', methods=['GET'])
-def registros_hoy():
-    """
-    Get all attendance records for today
-    """
+def get_registros_hoy():
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        conn = get_connection()
+        today = datetime.now().strftime('%Y-%m-%d')
         
-        # Get current date
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        cursor.execute('''
-            SELECT id, fecha, hora, nombre, apellido, email
-            FROM registros
-            WHERE fecha = ?
-            ORDER BY timestamp ASC
-        ''', (today,))
-        
-        registros = []
-        for row in cursor.fetchall():
-            id, fecha, hora, nombre, apellido, email = row
-            registros.append({
-                "id": id,
-                "fecha": fecha,
-                "hora": hora,
-                "nombre": nombre,
-                "apellido": apellido,
-                "email": email
-            })
-        
-        conn.close()
-        return jsonify(registros), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-@app.route('/ayudantes_presentes', methods=['GET'])
-def ayudantes_presentes():
-    """
-    Get list of assistants currently in the laboratory
-    """
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get current date
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        # Find users who have entered but not exited the lab
-        # (odd number of registrations today)
-        query = """
-        SELECT u.nombre, u.apellido, u.email, MAX(r.hora) as ultima_hora
-        FROM usuarios_permitidos u
-        JOIN registros r ON u.email = r.email
-        WHERE r.fecha = ?
-        GROUP BY u.email
-        HAVING COUNT(*) % 2 = 1
-        ORDER BY u.nombre
-        """
-        
-        cursor.execute(query, (today,))
-        
-        ayudantes = []
-        for row in cursor.fetchall():
-            nombre, apellido, email, ultima_hora = row
-            # Generate a consistent hash for the email to use as avatar placeholder
-            email_hash = hash(email) % 1000  # Using modulo to limit the range
-            
-            ayudantes.append({
-                "nombre": nombre,
-                "apellido": apellido,
-                "email": email,
-                "ultima_entrada": ultima_hora,
-                "foto_url": f"/api/placeholder/{email_hash}/200"  # Placeholder image based on email hash
-            })
-        
-        conn.close()
-        return jsonify(ayudantes), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/cumplimiento', methods=['GET'])
-def cumplimiento():
-    """
-    Get compliance data for users today
-    """
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get current date and time
-        now = datetime.now()
-        today = now.strftime("%Y-%m-%d")
-        dia_semana = now.strftime("%A")  # Day of week
-        hora_actual = now.strftime("%H:%M:%S")
-        
-        # Get all authorized users
-        cursor.execute("SELECT id, nombre, apellido, email FROM usuarios_permitidos WHERE activo = 1")
-        usuarios = cursor.fetchall()
-        
-        resultado = []
-        for user_id, nombre, apellido, email in usuarios:
-            # Get scheduled blocks for this user today
+        with conn.cursor() as cursor:
             cursor.execute("""
-                SELECT hora_entrada, hora_salida 
-                FROM horarios_asignados
-                WHERE usuario_id = ? AND dia = ?
-                ORDER BY hora_entrada
-            """, (user_id, dia_semana))
+                SELECT id, fecha, hora, dia, nombre, apellido, email
+                FROM registros 
+                WHERE fecha = %s 
+                ORDER BY hora DESC
+            """, (today,))
+            registros = cursor.fetchall()
             
-            bloques_horario = cursor.fetchall()
+            # Convertir manualmente cualquier objeto date a string
+            serializable_registros = []
+            for reg in registros:
+                serializable_reg = {}
+                for key, value in reg.items():
+                    # Convertir objetos date a string
+                    if isinstance(value, datetime):
+                        serializable_reg[key] = value.isoformat()
+                    elif isinstance(value, timedelta):
+                        serializable_reg[key] = str(value)
+                    # También manejar el tipo date específicamente
+                    elif hasattr(value, 'isoformat') and callable(value.isoformat):
+                        serializable_reg[key] = value.isoformat()
+                    else:
+                        serializable_reg[key] = value
+                serializable_registros.append(serializable_reg)
             
-            # Get attendance records for this user TODAY ONLY
-            cursor.execute("""
-                SELECT hora
-                FROM registros
-                WHERE email = ? AND fecha = ?
-                ORDER BY hora
-            """, (email, today))
-            
-            registros_hoy = cursor.fetchall()
-            hora_registros = [reg[0] for reg in registros_hoy]
-            
-            # Process user's compliance
-            bloques_estado = []
-            estado_general = "No Aplica"  # Default to No Aplica instead of Ausente
-            
-            # If they have a schedule for today
-            if bloques_horario:
-                estado_general = "Ausente"  # Reset to Ausente if they have a schedule
-                
-                for hora_entrada, hora_salida in bloques_horario:
-                    estado_bloque = evaluar_bloque(hora_entrada, hora_salida, hora_actual, hora_registros, today)
-                    bloques_estado.append({
-                        "inicio": hora_entrada,
-                        "fin": hora_salida,
-                        "estado": estado_bloque
-                    })
-                    
-                    # Update general state based on blocks
-                    if estado_bloque == "Cumpliendo" and estado_general != "Cumpliendo":
-                        estado_general = "Cumpliendo"
-                    elif estado_bloque == "Incompleto" and estado_general == "Ausente":
-                        estado_general = "Incompleto"
-                    elif estado_bloque == "Retrasado" and estado_general == "Ausente":
-                        estado_general = "Retrasado"
-            
-            resultado.append({
-                "nombre": nombre,
-                "apellido": apellido,
-                "email": email,
-                "estado": estado_general,
-                "bloques": bloques_estado
-            })
-        
         conn.close()
-        return jsonify(resultado), 200
-        
+        # Asegurarnos de que siempre devolvemos una lista, incluso vacía
+        return jsonify(serializable_registros if serializable_registros else [])
     except Exception as e:
+        print(f"Error al obtener registros de hoy: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+# --- ENDPOINT: Insertar nuevo registro ---
+@app.route('/registros', methods=['POST'])
+def add_registro():
+    data = request.get_json()
+    try:
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            # Obtener fecha y hora actuales si no se proporcionan
+            now = datetime.now()
+            fecha = data.get('fecha', now.strftime("%Y-%m-%d"))
+            hora = data.get('hora', now.strftime("%H:%M:%S"))
+            
+            # Mapeo de días de la semana (inglés -> español)
+            dias = {
+                'Monday': 'lunes',
+                'Tuesday': 'martes',
+                'Wednesday': 'miércoles',
+                'Thursday': 'jueves',
+                'Friday': 'viernes',
+                'Saturday': 'sábado',
+                'Sunday': 'domingo'
+            }
+            
+            # Obtener día de la semana en español
+            if 'dia' in data and data['dia']:
+                dia = data['dia']
+            else:
+                day_name = now.strftime("%A")  # Nombre del día en inglés
+                dia = dias.get(day_name, day_name)  # Traducir a español
+            
+            query = "INSERT INTO registros (fecha, hora, dia, nombre, apellido, email) VALUES (%s, %s, %s, %s, %s, %s)"
+            cursor.execute(query, (
+                fecha,
+                hora,
+                dia,
+                data['nombre'],
+                data['apellido'],
+                data['email']
+            ))
+            conn.commit()
+            registro_id = cursor.lastrowid
+        conn.close()
+        return jsonify({"message": "Registro agregado correctamente", "id": registro_id})
+    except Exception as e:
+        print(f"Error al añadir registro: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-def evaluar_bloque(hora_entrada, hora_salida, hora_actual, registros, fecha_actual=None):
-    """
-    Evaluate a time block's compliance status
-    """
-    # Convert string times to datetime.time objects for comparison
-    entrada_time = datetime.strptime(hora_entrada, "%H:%M:%S").time()
-    salida_time = datetime.strptime(hora_salida, "%H:%M:%S").time()
-    actual_time = datetime.strptime(hora_actual, "%H:%M:%S").time()
-    
-    # Convert registration times
-    registros_time = [datetime.strptime(reg, "%H:%M:%S").time() for reg in registros]
-    
-    # Check if this block is in the future
-    if entrada_time > actual_time:
-        return "Pendiente"
-    
-    # Check if this block is in the past
-    if salida_time < actual_time:
-        # Check if we have at least two registrations within this block
-        entradas_en_bloque = [reg for reg in registros_time if entrada_time <= reg <= salida_time]
-        
-        if len(entradas_en_bloque) >= 2:
-            return "Cumplido"
-        elif len(entradas_en_bloque) == 1:
-            return "Incompleto"
-        else:
-            return "Ausente"
-    
-    # Current block (in progress)
-    entradas_en_bloque = [reg for reg in registros_time if entrada_time <= reg <= actual_time]
-    
-    if len(entradas_en_bloque) >= 1:
-        return "Cumpliendo"
-    elif actual_time > entrada_time:
-        # Current time is after block start but no registrations
-        mins_late = (datetime.combine(datetime.today(), actual_time) - 
-                    datetime.combine(datetime.today(), entrada_time)).total_seconds() / 60
-        
-        if mins_late > 15:
-            return "Retrasado"
-        else:
-            return "Pendiente"  # Give a 15-min grace period
-    else:
-        return "Pendiente"
-
+# --- ENDPOINT: Lista de usuarios permitidos ---
 @app.route('/usuarios', methods=['GET'])
 def get_usuarios():
-    """
-    Get list of all authorized users
-    """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT id, nombre, apellido, email FROM usuarios_permitidos WHERE activo = 1")
-        
-        usuarios = []
-        for row in cursor.fetchall():
-            id, nombre, apellido, email = row
-            usuarios.append({
-                "id": id,
-                "nombre": nombre,
-                "apellido": apellido,
-                "email": email
-            })
-        
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM usuarios_permitidos WHERE activo = 1")
+            usuarios = cursor.fetchall()
         conn.close()
-        return jsonify(usuarios), 200
-        
+        return jsonify(usuarios)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# --- ENDPOINT: Horarios asignados ---
 @app.route('/horarios', methods=['GET'])
 def get_horarios():
-    """
-    Get schedules for all users or filtered by user ID
-    """
     try:
-        user_id = request.args.get('usuario_id')
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        if user_id:
-            cursor.execute("""
-                SELECT h.id, h.usuario_id, u.nombre, u.apellido, h.dia, h.hora_entrada, h.hora_salida
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            query = """
+                SELECT h.id, h.usuario_id, u.nombre, u.apellido, u.email, h.dia, h.hora_entrada, h.hora_salida
                 FROM horarios_asignados h
                 JOIN usuarios_permitidos u ON h.usuario_id = u.id
-                WHERE h.usuario_id = ?
-                ORDER BY h.dia, h.hora_entrada
-            """, (user_id,))
-        else:
-            cursor.execute("""
-                SELECT h.id, h.usuario_id, u.nombre, u.apellido, h.dia, h.hora_entrada, h.hora_salida
-                FROM horarios_asignados h
-                JOIN usuarios_permitidos u ON h.usuario_id = u.id
-                ORDER BY u.nombre, h.dia, h.hora_entrada
-            """)
-        
-        horarios = []
-        for row in cursor.fetchall():
-            id, usuario_id, nombre, apellido, dia, hora_entrada, hora_salida = row
-            horarios.append({
-                "id": id,
-                "usuario_id": usuario_id,
-                "nombre": nombre,
-                "apellido": apellido,
-                "dia": dia,
-                "hora_entrada": hora_entrada,
-                "hora_salida": hora_salida
-            })
-        
+            """
+            cursor.execute(query)
+            horarios = cursor.fetchall()
         conn.close()
-        return jsonify(horarios), 200
-        
+        return jsonify(horarios)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/historico', methods=['GET'])
-def get_historico():
-    """
-    Get historical attendance records filtered by date range
-    """
+# --- ENDPOINT: Cumplimiento ---
+@app.route('/cumplimiento', methods=['GET'])
+def get_cumplimiento():
     try:
-        fecha_inicio = request.args.get('fecha_inicio', datetime.now().strftime("%Y-%m-01"))
-        fecha_fin = request.args.get('fecha_fin', datetime.now().strftime("%Y-%m-%d"))
-        email = request.args.get('email')
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        query = """
-            SELECT id, fecha, hora, dia, nombre, apellido, email
-            FROM registros
-            WHERE fecha BETWEEN ? AND ?
-        """
-        params = [fecha_inicio, fecha_fin]
-        
-        if email:
-            query += " AND email = ?"
-            params.append(email)
-        
-        query += " ORDER BY fecha DESC, hora ASC"
-        
-        cursor.execute(query, params)
-        
-        registros = []
-        for row in cursor.fetchall():
-            id, fecha, hora, dia, nombre, apellido, email = row
-            registros.append({
-                "id": id,
-                "fecha": fecha,
-                "hora": hora,
-                "dia": dia,
-                "nombre": nombre,
-                "apellido": apellido,
-                "email": email
-            })
-        
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            # Preparar diccionario de traducción de días una sola vez
+            dias_traduccion = {
+                'monday': 'lunes', 
+                'tuesday': 'martes', 
+                'wednesday': 'miércoles',
+                'thursday': 'jueves', 
+                'friday': 'viernes', 
+                'saturday': 'sábado', 
+                'sunday': 'domingo'
+            }
+            
+            # Obtener información de fecha actual una sola vez
+            now = datetime.now()
+            dia_actual = now.strftime('%A').lower()  # Día en inglés: 'monday', 'tuesday', etc.
+            dia_actual_esp = dias_traduccion.get(dia_actual, dia_actual)
+            hora_actual = now.strftime('%H:%M:%S')
+            
+            # Obtener usuarios activos
+            cursor.execute("SELECT * FROM usuarios_permitidos WHERE activo = 1")
+            usuarios = cursor.fetchall()
+
+            cumplimiento = []
+
+            for user in usuarios:
+                cursor.execute("SELECT * FROM horarios_asignados WHERE usuario_id = %s", (user['id'],))
+                horarios = cursor.fetchall()
+
+                if not horarios:
+                    cumplimiento.append({
+                        "nombre": user['nombre'],
+                        "apellido": user['apellido'],
+                        "email": user['email'],
+                        "estado": "No Aplica",
+                        "bloques": [],
+                        "bloques_info": []
+                    })
+                    continue
+
+                bloques = []
+                cumplidos = 0
+                bloques_info = []  # Lista para almacenar información detallada de cada bloque
+
+                for h in horarios:
+                    bloque = f"{h['dia']} {h['hora_entrada']}-{h['hora_salida']}"
+                    bloques.append(bloque)
+                    
+                    # Determinar estado del bloque
+                    bloque_estado = "Ausente"  # Estado por defecto
+                    
+                    # Verificar si hay registros para este bloque
+                    cursor.execute("""
+                        SELECT COUNT(*) AS cuenta FROM registros
+                        WHERE email = %s AND dia = %s AND hora BETWEEN %s AND %s
+                    """, (user['email'], h['dia'], h['hora_entrada'], h['hora_salida']))
+                    r = cursor.fetchone()
+                    
+                    if r['cuenta'] > 0:
+                        # Hay registro para este bloque
+                        if h['dia'].lower() == dia_actual_esp:
+                            # Es para hoy
+                            if h['hora_entrada'] <= hora_actual <= h['hora_salida']:
+                                bloque_estado = "Cumpliendo"
+                            elif hora_actual < h['hora_entrada']:
+                                bloque_estado = "Pendiente"
+                            else:  # hora_actual > h['hora_salida']
+                                bloque_estado = "Cumplido"
+                                cumplidos += 1
+                        else:
+                            # No es hoy pero hay registro, está cumplido
+                            bloque_estado = "Cumplido"
+                            cumplidos += 1
+                    else:
+                        # No hay registro para este bloque
+                        if h['dia'].lower() == dia_actual_esp:
+                            # Es para hoy
+                            if hora_actual < h['hora_entrada']:
+                                bloque_estado = "Pendiente"
+                            else:
+                                bloque_estado = "Ausente"
+                        # Si no es hoy y no hay registro, queda como "Ausente"
+                            
+                    # Añadir información de este bloque a la lista
+                    bloques_info.append({
+                        "bloque": bloque,
+                        "estado": bloque_estado
+                    })
+
+                # Determinar estado general
+                if cumplidos == len(horarios):
+                    estado = "Cumple"
+                elif cumplidos == 0:
+                    estado = "No Cumple"
+                else:
+                    estado = "En Curso"
+
+                # Añadir entrada al resultado
+                cumplimiento.append({
+                    "nombre": user['nombre'],
+                    "apellido": user['apellido'],
+                    "email": user['email'],
+                    "estado": estado,
+                    "bloques": bloques,
+                    "bloques_info": bloques_info  # Incluir información detallada de cada bloque
+                })
+
         conn.close()
-        return jsonify(registros), 200
-        
+        return jsonify(cumplimiento)
     except Exception as e:
+        print(f"Error en cumplimiento: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/resumen', methods=['GET'])
-def get_resumen():
-    """
-    Get summary of attendance statistics for the current month
-    """
+# --- ENDPOINT: Ayudantes presentes ---
+@app.route('/ayudantes_presentes', methods=['GET'])
+def get_ayudantes_presentes():
     try:
-        # Get current month
-        now = datetime.now()
-        year_month = now.strftime("%Y-%m")
-        fecha_inicio = f"{year_month}-01"
+        conn = get_connection()
+        today = datetime.now().strftime('%Y-%m-%d')
         
-        # Calculate last day of the month
-        if now.month == 12:
-            next_month = datetime(now.year + 1, 1, 1)
-        else:
-            next_month = datetime(now.year, now.month + 1, 1)
-        
-        last_day = (next_month - timedelta(days=1)).day
-        fecha_fin = f"{year_month}-{last_day}"
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Get all users
-        cursor.execute("SELECT id, nombre, apellido, email FROM usuarios_permitidos WHERE activo = 1")
-        usuarios = cursor.fetchall()
-        
-        resultado = []
-        for user_id, nombre, apellido, email in usuarios:
-            # Count days with complete attendance
+        with conn.cursor() as cursor:
+            # Obtenemos todos los registros de hoy ordenados por email y hora
             cursor.execute("""
-                SELECT fecha, COUNT(*) as registros
-                FROM registros
-                WHERE email = ? AND fecha BETWEEN ? AND ?
-                GROUP BY fecha
-                HAVING COUNT(*) >= 2
-            """, (email, fecha_inicio, fecha_fin))
+                SELECT r.id, r.email, r.nombre, r.apellido, r.hora, r.fecha
+                FROM registros r
+                WHERE r.fecha = %s
+                ORDER BY r.email, r.hora
+            """, (today,))
             
-            dias_completos = len(cursor.fetchall())
+            todos_registros = cursor.fetchall()
             
-            # Count days with incomplete attendance
-            cursor.execute("""
-                SELECT fecha, COUNT(*) as registros
-                FROM registros
-                WHERE email = ? AND fecha BETWEEN ? AND ?
-                GROUP BY fecha
-                HAVING COUNT(*) = 1
-            """, (email, fecha_inicio, fecha_fin))
+            # Procesamos los registros para determinar quién está dentro
+            ayudantes_presentes = {}
+            for registro in todos_registros:
+                email = registro['email']
+                
+                # Si es un número par de entradas para este email, está dentro
+                # Si es impar, está fuera
+                if email in ayudantes_presentes:
+                    # Ya existe, así que esta entrada podría ser una salida
+                    ayudantes_presentes[email]['dentro'] = not ayudantes_presentes[email]['dentro']
+                    ayudantes_presentes[email]['ultima_hora'] = registro['hora']
+                else:
+                    # Primera entrada del día
+                    ayudantes_presentes[email] = {
+                        'nombre': registro['nombre'],
+                        'apellido': registro['apellido'],
+                        'email': email,
+                        'ultima_entrada': registro['hora'],
+                        'ultima_hora': registro['hora'],
+                        'dentro': True  # Primera entrada implica que está dentro
+                    }
             
-            dias_incompletos = len(cursor.fetchall())
+            # Filtramos solo aquellos que están dentro (última marca fue de entrada)
+            ayudantes_dentro = []
+            for email, datos in ayudantes_presentes.items():
+                if datos['dentro']:
+                    # Formatear la hora para mostrarla mejor
+                    try:
+                        if isinstance(datos['ultima_entrada'], str):
+                            hora_str = datos['ultima_entrada']
+                        else:
+                            hora_str = datos['ultima_entrada'].strftime('%H:%M:%S')
+                        
+                        datos['ultima_entrada'] = hora_str
+                    except:
+                        # Si hay algún error al formatear, dejamos la hora como está
+                        pass
+                    
+                    # Eliminamos la bandera 'dentro' que ya no necesitamos
+                    del datos['dentro']
+                    del datos['ultima_hora']
+                    
+                    ayudantes_dentro.append(datos)
             
-            # Get scheduled days for this month
-            cursor.execute("""
-                SELECT DISTINCT dia
-                FROM horarios_asignados
-                WHERE usuario_id = ?
-            """, (user_id,))
+            # Obtener fotos de perfil si existen
+            for ayudante in ayudantes_dentro:
+                try:
+                    cursor.execute("SELECT foto_url FROM usuarios_permitidos WHERE email = %s LIMIT 1", (ayudante['email'],))
+                    foto = cursor.fetchone()
+                    if foto and 'foto_url' in foto and foto['foto_url']:
+                        ayudante['foto_url'] = foto['foto_url']
+                    else:
+                        ayudante['foto_url'] = None
+                except:
+                    # Si hay algún error, simplemente no incluimos foto
+                    ayudante['foto_url'] = None
             
-            dias_programados = set([row[0] for row in cursor.fetchall()])
-            
-            # Count working days in this month
-            dias_habiles = 0
-            fecha_actual = datetime.strptime(fecha_inicio, "%Y-%m-%d")
-            fecha_final = datetime.strptime(fecha_fin, "%Y-%m-%d")
-            
-            while fecha_actual <= fecha_final:
-                if fecha_actual.strftime("%A") in dias_programados:
-                    dias_habiles += 1
-                fecha_actual += timedelta(days=1)
-            
-            # Calculate compliance percentage
-            cumplimiento = (dias_completos / dias_habiles * 100) if dias_habiles > 0 else 0
-            
-            resultado.append({
-                "nombre": nombre,
-                "apellido": apellido,
-                "email": email,
-                "dias_completos": dias_completos,
-                "dias_incompletos": dias_incompletos,
-                "dias_habiles": dias_habiles,
-                "cumplimiento": round(cumplimiento, 2)
-            })
-        
         conn.close()
-        return jsonify(resultado), 200
         
+        # Convertimos cualquier objeto no serializable a string
+        for ayudante in ayudantes_dentro:
+            for key, value in list(ayudante.items()):
+                if isinstance(value, (datetime, date)):
+                    ayudante[key] = value.isoformat()
+                elif isinstance(value, timedelta):
+                    ayudante[key] = str(value)
+                elif hasattr(value, 'isoformat') and callable(getattr(value, 'isoformat')):
+                    ayudante[key] = value.isoformat()
+        
+        return jsonify(ayudantes_dentro)
     except Exception as e:
+        print(f"Error al obtener ayudantes presentes: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# --- ENDPOINT: Horas acumuladas ---
+# --- ENDPOINT: Horas acumuladas mejorado ---
 @app.route('/horas_acumuladas', methods=['GET'])
 def get_horas_acumuladas():
-    """
-    Get accumulated hours for each user historically
-    """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+        conn = get_connection()
         
-        # Get all users
-        cursor.execute("SELECT id, nombre, apellido, email FROM usuarios_permitidos WHERE activo = 1")
-        usuarios = cursor.fetchall()
+        with conn.cursor() as cursor:
+            # Obtener usuarios activos
+            cursor.execute("SELECT id, nombre, apellido, email FROM usuarios_permitidos WHERE activo = 1")
+            usuarios = cursor.fetchall()
+            
+            resultado = []
+            
+            # Definir cuántas horas equivalen a un día completo (por ejemplo, 8 horas = 1 día)
+            HORAS_POR_DIA = 8
+            
+            for usuario in usuarios:
+                # Obtener todos los registros ordenados por fecha y hora
+                cursor.execute("""
+                    SELECT fecha, hora, id
+                    FROM registros
+                    WHERE email = %s
+                    ORDER BY fecha, hora
+                """, (usuario['email'],))
+                
+                todos_registros = cursor.fetchall()
+                
+                # Procesamiento mejorado de horas
+                horas_totales = 0
+                dias_procesados = set()
+                
+                # Agrupar registros por día para procesar pares entrada-salida
+                registros_por_dia = {}
+                for reg in todos_registros:
+                    fecha_str = str(reg['fecha'])
+                    if fecha_str not in registros_por_dia:
+                        registros_por_dia[fecha_str] = []
+                    registros_por_dia[fecha_str].append(reg)
+                
+                # Procesar cada día
+                for fecha, registros_dia in registros_por_dia.items():
+                    # Ordenar registros por hora
+                    registros_dia.sort(key=lambda x: x['hora'])
+                    
+                    # Si hay un número impar de registros, asumimos que falta un registro de salida
+                    # En ese caso, eliminamos el último registro para mantener pares completos
+                    if len(registros_dia) % 2 != 0 and len(registros_dia) > 0:
+                        registros_dia.pop()
+                    
+                    # Procesar pares de entrada-salida
+                    horas_dia = 0
+                    for i in range(0, len(registros_dia), 2):
+                        if i + 1 < len(registros_dia):  # Asegurarnos de que hay un par completo
+                            try:
+                                entrada_reg = registros_dia[i]
+                                salida_reg = registros_dia[i + 1]
+                                
+                                # Convertir a objetos datetime para cálculo
+                                if isinstance(entrada_reg['hora'], str):
+                                    entrada_hora = datetime.strptime(entrada_reg['hora'], '%H:%M:%S')
+                                else:
+                                    entrada_hora = entrada_reg['hora']
+                                    
+                                if isinstance(salida_reg['hora'], str):
+                                    salida_hora = datetime.strptime(salida_reg['hora'], '%H:%M:%S')
+                                else:
+                                    salida_hora = salida_reg['hora']
+                                
+                                # Verificar que la salida es posterior a la entrada
+                                if hasattr(salida_hora, 'hour') and hasattr(entrada_hora, 'hour'):
+                                    # Convertir a horas del día para comparación
+                                    entrada_horas = entrada_hora.hour + entrada_hora.minute/60 + entrada_hora.second/3600
+                                    salida_horas = salida_hora.hour + salida_hora.minute/60 + salida_hora.second/3600
+                                    
+                                    if salida_horas > entrada_horas:
+                                        horas_bloque = salida_horas - entrada_horas
+                                        horas_dia += horas_bloque
+                            except Exception as e:
+                                print(f"Error procesando par entrada-salida: {str(e)}")
+                                continue
+                    
+                    # Sumar las horas de este día al total
+                    horas_totales += horas_dia
+                
+                # Calcular días completos en función de las horas trabajadas
+                dias_completos = horas_totales / HORAS_POR_DIA
+                
+                # Agregar datos del usuario al resultado
+                resultado.append({
+                    "nombre": usuario['nombre'],
+                    "apellido": usuario['apellido'],
+                    "email": usuario['email'],
+                    "dias_asistidos": round(dias_completos, 1),  # Días completos calculados por horas
+                    "horas_totales": round(horas_totales, 1)     # Horas totales redondeadas a 1 decimal
+                })
+                
+        conn.close()
+        return jsonify(resultado if resultado else [])
+    except Exception as e:
+        print(f"Error al obtener horas acumuladas: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+# --- ENDPOINT: Detalle de horas por usuario (para debugging) ---
+@app.route('/horas_detalle/<email>', methods=['GET'])
+def get_horas_detalle(email):
+    try:
+        conn = get_connection()
         
-        resultado = []
-        for user_id, nombre, apellido, email in usuarios:
-            # Get all attendance records for this user
+        with conn.cursor() as cursor:
+            # Verificar que el usuario existe
+            cursor.execute("SELECT nombre, apellido FROM usuarios_permitidos WHERE email = %s AND activo = 1", (email,))
+            usuario = cursor.fetchone()
+            
+            if not usuario:
+                return jsonify({"error": "Usuario no encontrado o inactivo"}), 404
+            
+            # Obtener todos los registros ordenados por fecha y hora
             cursor.execute("""
                 SELECT fecha, hora, id
                 FROM registros
-                WHERE email = ?
+                WHERE email = %s
                 ORDER BY fecha, hora
             """, (email,))
             
-            registros = cursor.fetchall()
-            total_minutos = 0
-            horas_por_fecha = {}
+            todos_registros = cursor.fetchall()
             
-            # Process records in pairs (entry/exit)
-            fecha_actual = None
-            registros_del_dia = []
+            # Procesar los registros para mostrar el detalle
+            detalle_por_dia = {}
             
-            for fecha, hora, reg_id in registros:
-                if fecha != fecha_actual:
-                    # Process previous day's records
-                    if fecha_actual and registros_del_dia:
-                        minutos_dia, registro_detalle = calcular_horas_del_dia(registros_del_dia)
-                        total_minutos += minutos_dia
-                        horas_por_fecha[fecha_actual] = {
-                            "minutos": minutos_dia,
-                            "horas": round(minutos_dia / 60, 2),
-                            "detalle": registro_detalle
-                        }
-                    
-                    # Reset for new day
-                    fecha_actual = fecha
-                    registros_del_dia = []
+            for reg in todos_registros:
+                fecha_str = str(reg['fecha'])
                 
-                registros_del_dia.append((hora, reg_id))
+                # Convertir hora a formato estandarizado
+                if isinstance(reg['hora'], str):
+                    hora_str = reg['hora']
+                else:
+                    try:
+                        hora_str = reg['hora'].strftime('%H:%M:%S')
+                    except:
+                        hora_str = str(reg['hora'])
+                
+                # Agregar al diccionario de días
+                if fecha_str not in detalle_por_dia:
+                    detalle_por_dia[fecha_str] = []
+                
+                detalle_por_dia[fecha_str].append({
+                    "id": reg['id'],
+                    "hora": hora_str
+                })
             
-            # Process last day's records
-            if fecha_actual and registros_del_dia:
-                minutos_dia, registro_detalle = calcular_horas_del_dia(registros_del_dia)
-                total_minutos += minutos_dia
-                horas_por_fecha[fecha_actual] = {
-                    "minutos": minutos_dia,
-                    "horas": round(minutos_dia / 60, 2),
-                    "detalle": registro_detalle
-                }
+            # Calcular horas por día
+            resumen_dias = []
+            horas_totales = 0
             
-            # Add user's total
-            resultado.append({
-                "nombre": nombre,
-                "apellido": apellido,
+            for fecha, registros in detalle_por_dia.items():
+                # Ordenar registros por hora
+                registros.sort(key=lambda x: x['hora'])
+                
+                # Calcular pares entrada-salida
+                pares = []
+                horas_dia = 0
+                
+                for i in range(0, len(registros), 2):
+                    if i + 1 < len(registros):  # Hay un par completo
+                        entrada = registros[i]['hora']
+                        salida = registros[i + 1]['hora']
+                        
+                        try:
+                            # Convertir a horas decimales
+                            entrada_dt = datetime.strptime(entrada, '%H:%M:%S')
+                            salida_dt = datetime.strptime(salida, '%H:%M:%S')
+                            
+                            entrada_decimal = entrada_dt.hour + entrada_dt.minute/60 + entrada_dt.second/3600
+                            salida_decimal = salida_dt.hour + salida_dt.minute/60 + salida_dt.second/3600
+                            
+                            if salida_decimal > entrada_decimal:
+                                horas = salida_decimal - entrada_decimal
+                                horas_dia += horas
+                                
+                                pares.append({
+                                    "entrada": entrada,
+                                    "salida": salida,
+                                    "horas": round(horas, 2)
+                                })
+                        except Exception as e:
+                            print(f"Error calculando horas para par: {str(e)}")
+                
+                # Agregar resumen del día
+                resumen_dias.append({
+                    "fecha": fecha,
+                    "registros_totales": len(registros),
+                    "pares_completos": len(pares),
+                    "registros": registros,
+                    "pares": pares,
+                    "horas_dia": round(horas_dia, 2)
+                })
+                
+                horas_totales += horas_dia
+            
+            # Definir horas por día completo
+            HORAS_POR_DIA = 8
+            dias_completos = horas_totales / HORAS_POR_DIA
+            
+            # Preparar resultado final
+            resultado = {
+                "nombre": usuario['nombre'],
+                "apellido": usuario['apellido'],
                 "email": email,
-                "horas_totales": round(total_minutos / 60, 2),
-                "minutos_totales": total_minutos,
-                "detalle_por_fecha": horas_por_fecha
-            })
-        
+                "dias_calendario": len(detalle_por_dia),  # Días naturales con registros
+                "dias_completos": round(dias_completos, 2),  # Días equivalentes basados en horas
+                "horas_totales": round(horas_totales, 2),
+                "detalle_dias": resumen_dias
+            }
+            
         conn.close()
-        return jsonify(resultado), 200
-        
+        return jsonify(resultado)
     except Exception as e:
+        print(f"Error al obtener detalle de horas: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-def calcular_horas_del_dia(registros_del_dia):
-    """
-    Calculates the number of minutes worked in a day from a list of time records
-    """
-    minutos_totales = 0
-    registro_detalle = []
-    
-    # Process records in pairs (entry/exit)
-    for i in range(0, len(registros_del_dia) - 1, 2):
-        if i + 1 < len(registros_del_dia):
-            hora_entrada = registros_del_dia[i][0]
-            hora_salida = registros_del_dia[i + 1][0]
-            
-            # Convert to datetime objects
-            entrada_dt = datetime.strptime(hora_entrada, "%H:%M:%S")
-            salida_dt = datetime.strptime(hora_salida, "%H:%M:%S")
-            
-            # Calculate difference in minutes
-            diff_minutes = (salida_dt - entrada_dt).total_seconds() / 60
-            
-            # Only add positive differences
-            if diff_minutes > 0:
-                minutos_totales += diff_minutes
-                registro_detalle.append({
-                    "entrada": hora_entrada,
-                    "salida": hora_salida,
-                    "minutos": round(diff_minutes, 2)
-                })
-    
-    return minutos_totales, registro_detalle
-
-@app.route('/admin/usuario', methods=['POST'])
-def add_usuario():
-    """
-    Add a new authorized user
-    """
-    try:
-        data = request.json
-        nombre = data.get('nombre')
-        apellido = data.get('apellido')
-        email = data.get('email')
-        
-        if not (nombre and apellido and email):
-            return jsonify({"success": False, "message": "Datos incompletos"}), 400
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Check if email already exists
-        cursor.execute("SELECT id FROM usuarios_permitidos WHERE email = ?", (email,))
-        if cursor.fetchone():
-            conn.close()
-            return jsonify({"success": False, "message": "Email ya registrado"}), 409
-        
-        # Insert new user
-        cursor.execute("""
-            INSERT INTO usuarios_permitidos (nombre, apellido, email)
-            VALUES (?, ?, ?)
-        """, (nombre, apellido, email))
-        
-        conn.commit()
-        new_id = cursor.lastrowid
-        conn.close()
-        
-        return jsonify({
-            "success": True,
-            "message": "Usuario agregado correctamente",
-            "id": new_id
-        }), 201
-        
-    except Exception as e:
-        return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
-
-@app.route('/admin/horario', methods=['POST'])
-def add_horario():
-    """
-    Add a schedule block for a user
-    """
-    try:
-        data = request.json
-        usuario_id = data.get('usuario_id')
-        dia = data.get('dia')
-        hora_entrada = data.get('hora_entrada')
-        hora_salida = data.get('hora_salida')
-        
-        if not (usuario_id and dia and hora_entrada and hora_salida):
-            return jsonify({"success": False, "message": "Datos incompletos"}), 400
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Check if user exists
-        cursor.execute("SELECT id FROM usuarios_permitidos WHERE id = ?", (usuario_id,))
-        if not cursor.fetchone():
-            conn.close()
-            return jsonify({"success": False, "message": "Usuario no encontrado"}), 404
-        
-        # Insert schedule block
-        cursor.execute("""
-            INSERT INTO horarios_asignados (usuario_id, dia, hora_entrada, hora_salida)
-            VALUES (?, ?, ?, ?)
-        """, (usuario_id, dia, hora_entrada, hora_salida))
-        
-        conn.commit()
-        new_id = cursor.lastrowid
-        conn.close()
-        
-        return jsonify({
-            "success": True,
-            "message": "Horario agregado correctamente",
-            "id": new_id
-        }), 201
-        
-    except Exception as e:
-        return jsonify({"success": False, "message": f"Error: {str(e)}"}), 500
-
+# --- MAIN ---
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0')
