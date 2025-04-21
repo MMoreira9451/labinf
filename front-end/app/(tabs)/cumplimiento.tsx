@@ -1,255 +1,448 @@
-// app/cumplimiento.tsx
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
-import { Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 
-const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.5.63:5000'
-  : 'http://10.0.5.123:8081';
-
-export default function CumplimientoScreen() {
+const Cumplimiento = () => {
   const [cumplimiento, setCumplimiento] = useState([]);
-  const [refreshing, setRefreshing] = useState(false);
-  const [view, setView] = useState('resumen');
+  const [vista, setVista] = useState('resumen');
+  const [lastUpdate, setLastUpdate] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const loadCumplimiento = () => {
-    setRefreshing(true);
-    fetch(`${API_BASE}/cumplimiento`)
-      .then(res => res.json())
-      .then(data => {
-        setCumplimiento(Array.isArray(data) ? data : []);
-        setRefreshing(false);
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = () => {
+    setLoading(true);
+    setError(null);
+    
+    fetch('http://10.0.5.194:5000/cumplimiento')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('No se pudo conectar al servidor');
+        }
+        return response.json();
       })
-      .catch(err => {
-        console.error(err);
-        setRefreshing(false);
+      .then(data => {
+        setCumplimiento(data);
+        const now = new Date();
+        setLastUpdate(now.toLocaleTimeString() + ' ' + now.toLocaleDateString());
+        setLoading(false);
+      })
+      .catch(error => {
+        console.error('Error al cargar cumplimiento:', error);
+        setError('No pudimos cargar los datos. ¡Intenta de nuevo!');
+        setLoading(false);
       });
   };
 
-  useEffect(() => {
-    loadCumplimiento();
-    const interval = setInterval(loadCumplimiento, 300000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const onRefresh = () => {
-    loadCumplimiento();
-  };
-
-  const stats = {
-    total: cumplimiento.length,
-    cumpliendo: cumplimiento.filter(item => item.estado === 'Cumpliendo').length,
-    incompleto: cumplimiento.filter(item => item.estado === 'Incompleto').length,
-    ausente: cumplimiento.filter(item => item.estado === 'Ausente').length,
-    atrasado: cumplimiento.filter(item => item.estado === 'Atrasado').length,
-    pendiente: cumplimiento.filter(item => item.estado === 'Pendiente').length,
-    noAplica: cumplimiento.filter(item => item.estado === 'No Aplica').length,
-  };
-
-  const getStatusColor = (estado) => {
+  // Mapeo de estados según los requerimientos y la API
+  const mapearEstado = (estado) => {
     switch (estado) {
-      case 'Cumpliendo': return '#4CAF50';  // Green
-      case 'Cumplido': return '#4CAF50';    // Green (for completed blocks)
-      case 'Incompleto': return '#FF9800';  // Orange
-      case 'Ausente': return '#F44336';     // Red
-      case 'Atrasado': return '#FFC107';    // Yellow
-      case 'Pendiente': return '#2196F3';   // Blue
-      case 'No Aplica': return '#9E9E9E';   // Grey
-      default: return '#9E9E9E';            // Grey
+      case 'Cumple': return 'Cumplida';
+      case 'En Curso': return 'Pendiente';
+      case 'No Cumple': return 'No Cumplido';
+      case 'No Aplica': return 'No Aplica';
+      default: return 'Incompleto';
     }
   };
 
+  const contarPorEstado = (estado) => {
+    return cumplimiento.filter(c => mapearEstado(c.estado) === estado).length;
+  };
+
+  // Iconos para los estados de semana
+  const iconoEstado = {
+    'Cumplida': '✅',
+    'Pendiente': '⏳',
+    'Incompleto': '⚠️',
+    'No Cumplido': '❌',
+    'No Aplica': '🚫'
+  };
+
+  // Colores para los estados de semana
+  const colorEstado = {
+    'Cumplida': '#4CAF50',
+    'Pendiente': '#FFC107',
+    'Incompleto': '#FF9800',
+    'No Cumplido': '#F44336',
+    'No Aplica': '#9E9E9E'
+  };
+
+  // Mensajes para los estados de semana
+  const mensajeEstado = {
+    'Cumplida': '¡Todos los horarios cumplidos!',
+    'Pendiente': 'Algunos horarios cumplidos',
+    'Incompleto': 'Faltan horarios por cumplir',
+    'No Cumplido': 'Sin asistencia registrada',
+    'No Aplica': 'Sin horarios asignados'
+  };
+
+  // Colores para los estados de bloque
+  const colorBloque = {
+    'Cumpliendo': '#4CAF50',
+    'Pendiente': '#FFC107',
+    'Atrasado': '#795548',
+    'Ausente': '#F44336',
+    'Cumplido': '#2196F3'
+  };
+
+  const getTotalCumplimiento = () => {
+    const total = cumplimiento.length;
+    const cumpliendo = contarPorEstado('Cumplida');
+    return total > 0 ? Math.round((cumpliendo / total) * 100) : 0;
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Cargando información...</Text>
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={fetchData}>
+          <Text style={styles.retryButtonText}>Reintentar</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Cumplimiento de horarios</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Control de Asistencia</Text>
+        <Text style={styles.subtitle}>Monitoreo en tiempo real</Text>
+      </View>
 
-      <View style={styles.viewToggle}>
+      <View style={styles.statsContainer}>
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{cumplimiento.length}</Text>
+          <Text style={styles.statLabel}>Total</Text>
+        </View>
+        <View style={[styles.statCard, {backgroundColor: '#E3F2FD'}]}>
+          <Text style={styles.statValue}>{getTotalCumplimiento()}%</Text>
+          <Text style={styles.statLabel}>Cumplimiento</Text>
+        </View>
+      </View>
+
+      <View style={styles.tabContainer}>
         <TouchableOpacity 
-          style={[styles.toggleButton, view === 'resumen' && styles.toggleActive]}
-          onPress={() => setView('resumen')}
+          onPress={() => setVista('resumen')} 
+          style={[styles.tabButton, vista === 'resumen' && styles.tabButtonActive]}
         >
-          <Text style={[styles.toggleText, view === 'resumen' && styles.toggleActiveText]}>Resumen</Text>
+          <Text style={[styles.tabText, vista === 'resumen' && styles.tabTextActive]}>Resumen</Text>
         </TouchableOpacity>
         <TouchableOpacity 
-          style={[styles.toggleButton, view === 'detalle' && styles.toggleActive]}
-          onPress={() => setView('detalle')}
+          onPress={() => setVista('detalle')} 
+          style={[styles.tabButton, vista === 'detalle' && styles.tabButtonActive]}
         >
-          <Text style={[styles.toggleText, view === 'detalle' && styles.toggleActiveText]}>Detalle</Text>
+          <Text style={[styles.tabText, vista === 'detalle' && styles.tabTextActive]}>Detalle</Text>
         </TouchableOpacity>
       </View>
 
-      {view === 'resumen' ? (
-        <View style={styles.statsContainer}>
-          {Object.entries(stats).map(([key, value]) => (
-            key !== 'total' && (
-              <View key={key} style={styles.statCard}>
-                <Text style={styles.statValue}>{value}</Text>
-                <Text style={styles.statLabel}>{
-                  key === 'cumpliendo' ? 'Cumpliendo' :
-                  key === 'incompleto' ? 'Incompleto' :
-                  key === 'ausente' ? 'Ausente' :
-                  key === 'atrasado' ? 'Atrasado' :
-                  key === 'pendiente' ? 'Pendiente' :
-                  key === 'noAplica' ? 'No aplica' : key
-                }</Text>
-                <View style={[styles.statusIndicator, { backgroundColor: getStatusColor(key.charAt(0).toUpperCase() + key.slice(1)) }]} />
+      {vista === 'resumen' && (
+        <View style={styles.gridContainer}>
+          {['Cumplida', 'Pendiente', 'Incompleto', 'No Cumplido', 'No Aplica'].map((estado, index) => (
+            <View key={index} style={[styles.gridItem, {borderLeftColor: colorEstado[estado], borderLeftWidth: 5}]}>
+              <Text style={styles.estadoIcon}>{iconoEstado[estado]}</Text>
+              <View>
+                <Text style={styles.estadoTitulo}>{estado}</Text>
+                <Text style={styles.estadoContador}>{contarPorEstado(estado)} personas</Text>
               </View>
-            )
+            </View>
           ))}
         </View>
-      ) : (
-        <FlatList
-          data={cumplimiento}
-          keyExtractor={(item, index) => `${item.email}-${index}`}
-          renderItem={({ item }) => (
-            <View style={styles.cumplimientoItem}>
-              <Text style={styles.cumplimientoNombre}>{item.nombre} {item.apellido}</Text>
-              <View style={[styles.cumplimientoEstado, { backgroundColor: getStatusColor(item.estado) }]}>
-                <Text style={styles.cumplimientoEstadoText}>{item.estado}</Text>
-              </View>
-              {item.bloques?.length > 0 ? (
-                <View style={styles.bloquesContainer}>
-                  {item.bloques.map((bloque, idx) => (
-                    <View key={idx} style={styles.bloqueItem}>
-                      <Text style={styles.bloqueHora}>{bloque.inicio} - {bloque.fin}</Text>
-                      <Text style={[
-                        styles.bloqueEstado, 
-                        { color: getStatusColor(bloque.estado || 'Pendiente') }
-                      ]}>
-                        {bloque.estado || 'Pendiente'}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              ) : item.estado === 'No Aplica' && (
-                <Text style={styles.noScheduleText}>Sin horario programado para hoy</Text>
-              )}
-            </View>
-          )}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        />
       )}
 
-      <Text style={styles.lastUpdate}>Última actualización: {new Date().toLocaleTimeString()}</Text>
+      {vista === 'detalle' && (
+        <ScrollView style={styles.scrollContainer}>
+          {cumplimiento.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>No hay datos de cumplimiento disponibles</Text>
+            </View>
+          ) : (
+            cumplimiento.map((c, index) => {
+              const estado = mapearEstado(c.estado);
+              return (
+                <View key={index} style={[styles.card, {borderLeftColor: colorEstado[estado], borderLeftWidth: 5}]}>
+                  <View style={styles.cardHeader}>
+                    <Text style={styles.cardTitle}>{c.nombre} {c.apellido}</Text>
+                    <View style={[styles.statusBadge, {backgroundColor: colorEstado[estado]}]}>
+                      <Text style={styles.statusText}>{estado}</Text>
+                    </View>
+                  </View>
+                  
+                  <Text style={styles.statusMessage}>{mensajeEstado[estado]}</Text>
+                  
+                  {c.bloques && c.bloques.length > 0 ? (
+                    <View style={styles.blocksContainer}>
+                      <Text style={styles.blocksTitle}>Bloques Horarios:</Text>
+                      {/* Usar bloques_info si está disponible o mostrar bloques simples */}
+                      {c.bloques_info ? (
+                        c.bloques_info.map((bloque, i) => (
+                          <View key={i} style={styles.blockRow}>
+                            <Text style={styles.blockTime}>{bloque.bloque}</Text>
+                            <View style={[styles.blockStatusBadge, {backgroundColor: colorBloque[bloque.estado] || '#9E9E9E'}]}>
+                              <Text style={styles.blockStatusText}>{bloque.estado}</Text>
+                            </View>
+                          </View>
+                        ))
+                      ) : (
+                        c.bloques.map((bloque, i) => (
+                          <View key={i} style={styles.blockRow}>
+                            <Text style={styles.blockTime}>{bloque}</Text>
+                            <View style={[styles.blockStatusBadge, {backgroundColor: '#9E9E9E'}]}>
+                              <Text style={styles.blockStatusText}>No Disponible</Text>
+                            </View>
+                          </View>
+                        ))
+                      )}
+                    </View>
+                  ) : (
+                    <Text style={styles.noBlocksText}>Sin bloques asignados</Text>
+                  )}
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+      )}
+
+      <View style={styles.footer}>
+        <Text style={styles.updateText}>Última actualización: {lastUpdate}</Text>
+        <TouchableOpacity style={styles.refreshButton} onPress={fetchData}>
+          <Text style={styles.refreshButtonText}>Actualizar datos</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-    padding: 20,
+    padding: 16,
+    backgroundColor: '#f5f5f5'
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666'
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#d32f2f',
+    textAlign: 'center',
+    marginBottom: 20
+  },
+  retryButton: {
+    backgroundColor: '#0066CC',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5
+  },
+  retryButtonText: {
+    color: 'white',
+    fontWeight: 'bold'
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 20
   },
   title: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 20,
-    textAlign: 'center',
+    color: '#0066CC'
   },
-  viewToggle: {
-    flexDirection: 'row',
-    marginBottom: 15,
-    justifyContent: 'center',
-  },
-  toggleButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: 'white',
-    marginHorizontal: 5,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  toggleActive: {
-    backgroundColor: '#1890ff',
-    borderColor: '#1890ff',
-  },
-  toggleText: {
-    color: '#333',
-  },
-  toggleActiveText: {
-    color: 'white',
+  subtitle: {
+    fontSize: 14,
+    color: '#666'
   },
   statsContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     justifyContent: 'space-between',
+    marginBottom: 20
   },
   statCard: {
+    flex: 1,
+    backgroundColor: '#E8F5E9',
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginHorizontal: 5,
+    elevation: 2
+  },
+  statValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#0066CC'
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#666'
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    marginBottom: 20,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#E0E0E0'
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center'
+  },
+  tabButtonActive: {
+    backgroundColor: '#0066CC'
+  },
+  tabText: {
+    fontWeight: '600',
+    color: '#555'
+  },
+  tabTextActive: {
+    color: 'white'
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between'
+  },
+  gridItem: {
     width: '48%',
     backgroundColor: 'white',
     padding: 15,
     marginBottom: 15,
     borderRadius: 10,
+    flexDirection: 'row',
     alignItems: 'center',
-    position: 'relative',
+    elevation: 2
   },
-  statValue: {
-    fontSize: 32,
-    fontWeight: 'bold',
+  estadoIcon: {
+    fontSize: 24,
+    marginRight: 10
   },
-  statLabel: {
+  estadoTitulo: {
     fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
+    fontWeight: 'bold'
   },
-  statusIndicator: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: 10,
-    height: '100%',
-    borderTopLeftRadius: 10,
-    borderBottomLeftRadius: 10,
+  estadoContador: {
+    fontSize: 12,
+    color: '#666'
   },
-  cumplimientoItem: {
-    padding: 15,
-    marginBottom: 10,
-    backgroundColor: 'white',
-    borderRadius: 5,
+  scrollContainer: {
+    flex: 1
   },
-  cumplimientoNombre: {
+  emptyState: {
+    padding: 40,
+    alignItems: 'center'
+  },
+  emptyStateText: {
     fontSize: 16,
-    fontWeight: '500',
-    marginBottom: 5,
+    color: '#666',
+    textAlign: 'center'
   },
-  cumplimientoEstado: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 15,
-    marginBottom: 10,
+  card: {
+    backgroundColor: 'white',
+    padding: 15,
+    marginBottom: 15,
+    borderRadius: 10,
+    elevation: 2
   },
-  cumplimientoEstadoText: {
-    color: 'white',
-    fontWeight: '500',
-  },
-  bloquesContainer: {
-    marginTop: 5,
-  },
-  bloqueItem: {
+  cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: 'bold'
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20
+  },
+  statusText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+  statusMessage: {
+    fontSize: 14,
+    fontStyle: 'italic',
+    marginBottom: 10,
+    color: '#666'
+  },
+  blocksContainer: {
+    marginTop: 10
+  },
+  blocksTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 5
+  },
+  blockRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingVertical: 5,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: '#eee'
   },
-  bloqueHora: {
-    color: '#666',
+  blockTime: {
+    fontSize: 14
   },
-  bloqueEstado: {
-    fontWeight: '500',
+  blockStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 15
   },
-  noScheduleText: {
+  blockStatusText: {
+    fontSize: 11,
+    color: 'white',
+    fontWeight: 'bold'
+  },
+  noBlocksText: {
+    fontSize: 14,
     fontStyle: 'italic',
-    color: '#757575',
-    marginTop: 8,
-  },
-  lastUpdate: {
-    textAlign: 'center',
-    fontSize: 12,
     color: '#999',
-    marginTop: 10,
+    textAlign: 'center',
+    marginTop: 10
   },
+  footer: {
+    marginTop: 15,
+    alignItems: 'center'
+  },
+  updateText: {
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 10
+  },
+  refreshButton: {
+    backgroundColor: '#0066CC',
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+    borderRadius: 20
+  },
+  refreshButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600'
+  }
 });
+
+export default Cumplimiento;

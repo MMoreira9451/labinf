@@ -1,28 +1,45 @@
 // app/ayudantes.tsx
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, FlatList, Platform, RefreshControl, Image } from 'react-native';
+import { StyleSheet, Text, View, FlatList, Platform, RefreshControl, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 
-const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.5.63:5000'
-  : 'http://10.0.5.63:8081';
+// Usar una constante directa para la URL de la API
+const API_BASE = 'http://10.0.5.194:5000';
 
 export default function AyudantesScreen() {
   const [ayudantes, setAyudantes] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
 
   const loadAyudantes = () => {
     setRefreshing(true);
+    setLoading(true);
+    setError(null);
+    
+    console.log("Cargando datos desde:", `${API_BASE}/ayudantes_presentes`);
+    
     fetch(`${API_BASE}/ayudantes_presentes`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
+        }
+        return res.json();
+      })
       .then(data => {
-        setAyudantes(data);
+        console.log("Datos recibidos:", data);
+        setAyudantes(Array.isArray(data) ? data : []);
         setLastUpdated(new Date());
         setRefreshing(false);
+        setLoading(false);
       })
       .catch(err => {
         console.error('Error al cargar los ayudantes presentes:', err);
+        setError(`No se pudieron cargar los ayudantes: ${err.message}`);
         setRefreshing(false);
+        setLoading(false);
+        // En caso de error, inicializar ayudantes como un array vacío
+        setAyudantes([]);
       });
   };
 
@@ -37,8 +54,32 @@ export default function AyudantesScreen() {
   };
 
   const getInitials = (nombre, apellido) => {
-    return (nombre.charAt(0) + apellido.charAt(0)).toUpperCase();
+    const nombreInit = nombre && nombre.charAt(0) ? nombre.charAt(0) : '';
+    const apellidoInit = apellido && apellido.charAt(0) ? apellido.charAt(0) : '';
+    return (nombreInit + apellidoInit).toUpperCase();
   };
+
+  // Mostrar indicador de carga mientras se cargan los datos
+  if (loading && !refreshing) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#0066CC" />
+        <Text style={styles.loadingText}>Cargando ayudantes presentes...</Text>
+      </View>
+    );
+  }
+
+  // Mostrar mensaje de error si ocurrió algún problema
+  if (error) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity style={styles.retryButton} onPress={loadAyudantes}>
+          <Text style={styles.retryButtonText}>Reintentar</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -51,7 +92,7 @@ export default function AyudantesScreen() {
       ) : (
         <FlatList
           data={ayudantes}
-          keyExtractor={(item) => item.email}
+          keyExtractor={(item, index) => item.email || `item-${index}`}
           numColumns={2}
           columnWrapperStyle={styles.ayudantesRow}
           renderItem={({ item }) => (
@@ -77,6 +118,13 @@ export default function AyudantesScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
+          ListEmptyComponent={
+            refreshing ? null : (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No hay ayudantes en el laboratorio actualmente</Text>
+              </View>
+            )
+          }
         />
       )}
 
@@ -92,6 +140,33 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
     padding: 20,
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#d32f2f',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: '#0066CC',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
   },
   title: {
     fontSize: 22,

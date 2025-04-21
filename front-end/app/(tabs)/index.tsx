@@ -6,8 +6,8 @@ import QRCode from 'react-native-qrcode-svg';
 import { StatusBar } from 'expo-status-bar';
 
 const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.5.63:5000'
-  : 'http://10.0.5.63:8081'; // Replace if using Expo Go on mobile
+  ? 'http://10.0.5.194:5000'
+  : 'http://10.0.5.194:8081'; // Replace if using Expo Go on mobile
 
 export default function QRGenerator() {
   const [name, setName] = useState('');
