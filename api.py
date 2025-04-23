@@ -1,9 +1,10 @@
+import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import pymysql
 from datetime import datetime, timedelta, date
-from datetime import datetime, timedelta
 import json
+import ssl  # Importamos el módulo SSL
 
 app = Flask(__name__)
 CORS(app)
@@ -33,9 +34,9 @@ app.json = CustomJSONProvider(app)
 
 # --- CONFIGURACIÓN DE CONEXIÓN ---
 DB_CONFIG = {
-    'host': '10.0.5.194',  # Actualizado a la nueva IP
-    'user': 'qruser',
-    'password': 'tu_password_segura',
+    'host': '10.0.3.54',  # Actualizado a la nueva IP
+    'user': 'mm',
+    'password': 'Gin160306',
     'database': 'registro_qr',
     'port': 3306,
     "charset": "utf8mb4",
@@ -619,6 +620,38 @@ def get_horas_detalle(email):
         print(f"Error al obtener detalle de horas: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# --- MAIN ---
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    # Definir rutas a los certificados
+    # Opción 1: Rutas absolutas
+    cert_path = 'certificate.pem'  # Actualiza esta ruta
+    key_path = 'privatekey.pem'    # Actualiza esta ruta
+    
+    # Opción 2: Rutas relativas al directorio del script
+    # cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certificate.pem')
+    # key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'privatekey.pem')
+    
+    # Verificar que los archivos de certificado existen
+    if not os.path.exists(cert_path) or not os.path.exists(key_path):
+        print(f"Error: Certificados no encontrados en las rutas especificadas")
+        print(f"Certificado: {cert_path}")
+        print(f"Clave privada: {key_path}")
+        print("Verifica las rutas o mueve los certificados a estas ubicaciones")
+        exit(1)
+    else:
+        print(f"Certificados encontrados correctamente")
+    
+    # Configurar contexto SSL
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_path, key_path)
+        
+        # Configuraciones de seguridad recomendadas
+        context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1  # Deshabilitar protocolos inseguros
+        
+        print("Contexto SSL configurado correctamente")
+    except Exception as e:
+        print(f"Error al configurar el contexto SSL: {str(e)}")
+        exit(1)
+    
+    print("Iniciando servidor HTTPS en 10.0.3.54:5000")
+    app.run(debug=True, host='10.0.3.54', port=5000, ssl_context=context)

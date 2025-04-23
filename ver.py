@@ -68,9 +68,9 @@ class LectorQR(BackgroundLayout):
         
         # Configuración de la base de datos MySQL
         self.db_config = {
-            'host': '10.0.5.194',
-            'user': 'qruser',
-            'password': 'tu_password_segura',
+            'host': '10.0.3.54',
+            'user': 'mm',
+            'password': 'Gin160306',
             'database': 'registro_qr',
             'port': 3306,
             'charset': 'utf8mb4',
@@ -382,12 +382,13 @@ class LectorQR(BackgroundLayout):
     
             # Determinar si es entrada o salida
             # Primero verificamos si la columna tipo existe
+            # Si la columna se llama 'metodo' en la base de datos pero en tu código buscas 'tipo'
             cursor.execute("""
                 SELECT COUNT(*) as exists_column 
                 FROM information_schema.COLUMNS 
                 WHERE TABLE_SCHEMA = %s 
                 AND TABLE_NAME = 'registros' 
-                AND COLUMN_NAME = 'tipo'
+                AND COLUMN_NAME = 'metodo'  # Cambia 'tipo' por 'metodo' si es necesario
             """, (self.db_config['database'],))
             
             column_exists = cursor.fetchone()
