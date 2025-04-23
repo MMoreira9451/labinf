@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
 
 // Usar una constante directa para la URL de la API
-const API_BASE = 'http://10.0.5.194:5000';
+const API_BASE = 'http://10.0.3.54:5000';
 
 export default function HorasAcumuladasScreen() {
   const [horasData, setHorasData] = useState([]);

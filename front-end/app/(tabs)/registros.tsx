@@ -4,8 +4,8 @@ import { StyleSheet, Text, View, FlatList, RefreshControl, TouchableOpacity, Scr
 import { Platform } from 'react-native';
 
 const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.5.194:5000'
-  : 'http://10.0.5.194:8081';
+  ? 'http://10.0.3.54:5000'
+  : 'http://10.0.3.54:8081';
 
 export default function RegistrosScreen() {
   const [registros, setRegistros] = useState([]);
@@ -19,7 +19,7 @@ export default function RegistrosScreen() {
     setLoading(true);
     setError(null);
     
-    fetch(`http://10.0.5.194:5000/registros_hoy`)
+    fetch(`http://10.0.3.54:5000/registros_hoy`)
       .then(res => {
         if (!res.ok) {
           throw new Error(`Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
