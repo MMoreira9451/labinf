@@ -3,9 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, FlatList, RefreshControl, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { Platform } from 'react-native';
 
-const API_BASE = Platform.OS === 'web'
-  ? 'http://10.0.3.54:5000'
-  : 'http://10.0.3.54:8081';
+// Usar https para todas las conexiones API
+const API_BASE = 'http://acceso.informaticauaint.com/api';
 
 export default function RegistrosScreen() {
   const [registros, setRegistros] = useState([]);
@@ -19,7 +18,7 @@ export default function RegistrosScreen() {
     setLoading(true);
     setError(null);
     
-    fetch(`https://acceso.informaticauaint.com/api/registros_hoy`)
+    fetch(`${API_BASE}/registros_hoy`)
       .then(res => {
         if (!res.ok) {
           throw new Error(`Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
@@ -27,9 +26,21 @@ export default function RegistrosScreen() {
         return res.json();
       })
       .then(data => {
-        // Asegurarse de que data es un array
+        // Asegurarse de que data es un array y verificar los datos
         const registrosArray = Array.isArray(data) ? data : [];
-        setRegistros(registrosArray);
+        
+        // Validar y sanitizar cada registro para evitar problemas de renderizado
+        const sanitizedRegistros = registrosArray.map(registro => ({
+          id: registro.id || `id-${Math.random().toString(36).substr(2, 9)}`,
+          fecha: registro.fecha || '',
+          hora: registro.hora || '',
+          dia: registro.dia || '',
+          nombre: registro.nombre || 'Sin nombre',
+          apellido: registro.apellido || 'Sin apellido',
+          email: registro.email || 'sin-email@example.com'
+        }));
+        
+        setRegistros(sanitizedRegistros);
         setRefreshing(false);
         setLoading(false);
       })
@@ -45,8 +56,14 @@ export default function RegistrosScreen() {
 
   useEffect(() => {
     loadRegistros();
-    const interval = setInterval(loadRegistros, 300000);
-    return () => clearInterval(interval);
+    
+    // Configurar intervalo para recargar datos
+    const interval = setInterval(loadRegistros, 300000); // 5 minutos
+    
+    // Limpiar intervalo cuando el componente se desmonte
+    return () => {
+      clearInterval(interval);
+    };
   }, []);
 
   const onRefresh = () => {
@@ -54,41 +71,76 @@ export default function RegistrosScreen() {
   };
 
   const getUniquePersonas = () => {
-    // Verificar que registros sea un array antes de usar map
+    // Verificar que registros sea un array válido
     if (!Array.isArray(registros) || registros.length === 0) {
       return [];
     }
     
-    const uniqueEmails = [...new Set(registros.map(item => item.email))];
+    // Filtrar cualquier registro sin email válido
+    const validRegistros = registros.filter(item => item && item.email);
+    
+    // Obtener emails únicos
+    const uniqueEmails = [...new Set(validRegistros.map(item => item.email))];
+    
+    // Mapear a objetos con nombre y email
     return uniqueEmails.map(email => {
-      const persona = registros.find(r => r.email === email);
+      const persona = validRegistros.find(r => r.email === email);
+      if (!persona) return { email, nombre: 'Desconocido' };
+      
       return {
         email,
-        nombre: `${persona.nombre} ${persona.apellido}`,
+        nombre: `${persona.nombre || ''} ${persona.apellido || ''}`.trim() || 'Desconocido',
       };
     });
   };
 
+  // Filtrar registros por persona seleccionada
   const filteredRegistros = filtroPersona 
-    ? registros.filter(item => item.email === filtroPersona)
+    ? registros.filter(item => item && item.email === filtroPersona)
     : registros;
 
   const getRegistroTipo = (registro, todosRegistros) => {
-    // Asegurarse de que todosRegistros es un array
-    if (!Array.isArray(todosRegistros) || todosRegistros.length === 0) {
+    // Validar entradas
+    if (!registro || !registro.email || !Array.isArray(todosRegistros) || todosRegistros.length === 0) {
       return 'Desconocido';
     }
     
-    const registrosPersona = todosRegistros
-      .filter(r => r.email === registro.email)
-      .sort((a, b) => new Date(`2000-01-01T${a.hora}`) - new Date(`2000-01-01T${b.hora}`));
+    try {
+      // Filtrar registros válidos de la misma persona
+      const registrosPersona = todosRegistros
+        .filter(r => r && r.email === registro.email && r.hora)
+        .sort((a, b) => {
+          try {
+            return new Date(`2000-01-01T${a.hora}`) - new Date(`2000-01-01T${b.hora}`);
+          } catch (e) {
+            console.warn('Error sorting times:', e);
+            return 0;
+          }
+        });
 
-    const idx = registrosPersona.findIndex(r => 
-      (r.id && registro.id && r.id === registro.id) || 
-      (r.hora === registro.hora && r.nombre === registro.nombre)
-    );
-    
-    return idx % 2 === 0 ? 'Entrada' : 'Salida';
+      if (registrosPersona.length === 0) return 'Entrada';
+
+      // Encontrar el índice del registro actual
+      const idx = registrosPersona.findIndex(r => {
+        // Si tenemos IDs, compararlos primero
+        if (r.id && registro.id) {
+          return r.id === registro.id;
+        }
+        // Si no tenemos IDs, comparar por hora y nombre
+        return r.hora === registro.hora && 
+               r.nombre === registro.nombre && 
+               r.apellido === registro.apellido;
+      });
+      
+      // Si no se encuentra el registro, devolver valor por defecto
+      if (idx === -1) return 'Desconocido';
+      
+      // Determinar si es entrada o salida
+      return idx % 2 === 0 ? 'Entrada' : 'Salida';
+    } catch (error) {
+      console.error('Error en getRegistroTipo:', error);
+      return 'Desconocido';
+    }
   };
 
   // Mostrar indicador de carga mientras se cargan los datos
@@ -113,6 +165,9 @@ export default function RegistrosScreen() {
     );
   }
 
+  // Obtener personas únicas para filtros
+  const uniquePersonas = getUniquePersonas();
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Registros de Hoy</Text>
@@ -125,9 +180,9 @@ export default function RegistrosScreen() {
           <Text style={styles.filterText}>Todos</Text>
         </TouchableOpacity>
 
-        {getUniquePersonas().map((persona, idx) => (
+        {uniquePersonas.map((persona, idx) => (
           <TouchableOpacity 
-            key={idx} 
+            key={`persona-${idx}-${persona.email}`}
             style={[styles.filterButton, filtroPersona === persona.email && styles.filterActive]}
             onPress={() => setFiltroPersona(persona.email)}
           >
@@ -136,26 +191,34 @@ export default function RegistrosScreen() {
         ))}
       </ScrollView>
 
-      {filteredRegistros.length === 0 ? (
+      {!Array.isArray(filteredRegistros) || filteredRegistros.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>No hay registros para mostrar</Text>
         </View>
       ) : (
         <FlatList
           data={filteredRegistros}
-          keyExtractor={(item, index) => `${item.id || index}`}
+          keyExtractor={(item, index) => `${item?.id || `reg-${index}`}`}
           renderItem={({ item }) => (
-            <View style={styles.registroItem}>
-              <Text style={styles.registroNombre}>{item.nombre} {item.apellido}</Text>
-              <Text style={styles.registroHora}>{item.hora}</Text>
-              <Text style={styles.registroTipo}>{getRegistroTipo(item, filteredRegistros)}</Text>
-            </View>
+            item ? (
+              <View style={styles.registroItem}>
+                <Text style={styles.registroNombre}>
+                  {item.nombre || ''} {item.apellido || ''}
+                </Text>
+                <Text style={styles.registroHora}>{item.hora || '--:--'}</Text>
+                <Text style={styles.registroTipo}>
+                  {getRegistroTipo(item, filteredRegistros)}
+                </Text>
+              </View>
+            ) : null
           )}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         />
       )}
 
-      <Text style={styles.lastUpdate}>Última actualización: {new Date().toLocaleTimeString()}</Text>
+      <Text style={styles.lastUpdate}>
+        Última actualización: {new Date().toLocaleTimeString()}
+      </Text>
     </View>
   );
 }
