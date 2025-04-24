@@ -199,6 +199,7 @@ def get_horarios():
         return jsonify({"error": str(e)}), 500
 
 # --- ENDPOINT: Cumplimiento CORREGIDO ---
+# --- ENDPOINT: Cumplimiento CORREGIDO ---
 @app.route('/cumplimiento', methods=['GET'])
 def get_cumplimiento():
     try:
@@ -248,7 +249,24 @@ def get_cumplimiento():
                 bloques_info = []  # Lista para almacenar información detallada de cada bloque
 
                 for h in horarios:
-                    bloque = f"{h['dia']} {h['hora_entrada']}-{h['hora_salida']}"
+                    # Asegurarnos de que hora_entrada y hora_salida sean strings
+                    if not isinstance(h['hora_entrada'], str):
+                        if hasattr(h['hora_entrada'], 'strftime'):
+                            hora_entrada = h['hora_entrada'].strftime('%H:%M:%S')
+                        else:
+                            hora_entrada = str(h['hora_entrada'])
+                    else:
+                        hora_entrada = h['hora_entrada']
+                        
+                    if not isinstance(h['hora_salida'], str):
+                        if hasattr(h['hora_salida'], 'strftime'):
+                            hora_salida = h['hora_salida'].strftime('%H:%M:%S')
+                        else:
+                            hora_salida = str(h['hora_salida'])
+                    else:
+                        hora_salida = h['hora_salida']
+                    
+                    bloque = f"{h['dia']} {hora_entrada}-{hora_salida}"
                     bloques.append(bloque)
                     
                     # Determinar estado del bloque
@@ -273,8 +291,14 @@ def get_cumplimiento():
                     registros_del_dia = cursor.fetchall()
                     
                     # Convertir horas de bloque a objetos datetime para comparación
-                    hora_entrada_dt = datetime.strptime(h['hora_entrada'], "%H:%M:%S").time()
-                    hora_salida_dt = datetime.strptime(h['hora_salida'], "%H:%M:%S").time()
+                    try:
+                        hora_entrada_dt = datetime.strptime(hora_entrada, "%H:%M:%S").time()
+                        hora_salida_dt = datetime.strptime(hora_salida, "%H:%M:%S").time()
+                    except Exception as e:
+                        print(f"Error convirtiendo hora_entrada/salida: {e}")
+                        # Proporcionar valores predeterminados para evitar errores
+                        hora_entrada_dt = datetime.strptime("00:00:00", "%H:%M:%S").time()
+                        hora_salida_dt = datetime.strptime("23:59:59", "%H:%M:%S").time()
                     
                     # CAMBIO: Considerar cumplido si hay registros que cruzan el bloque
                     if registros_del_dia:
@@ -288,58 +312,81 @@ def get_cumplimiento():
                                 reg_entrada = registros_del_dia[i]
                                 reg_salida = registros_del_dia[i + 1]
                                 
-                                # Convertir a objetos time
-                                if isinstance(reg_entrada['hora'], str):
-                                    reg_entrada_time = datetime.strptime(reg_entrada['hora'], "%H:%M:%S").time()
-                                else:
-                                    reg_entrada_time = reg_entrada['hora']
+                                # Convertir a objetos time manejando posibles errores
+                                try:
+                                    if isinstance(reg_entrada['hora'], str):
+                                        reg_entrada_time = datetime.strptime(reg_entrada['hora'], "%H:%M:%S").time()
+                                    elif hasattr(reg_entrada['hora'], 'strftime'):
+                                        reg_entrada_time = reg_entrada['hora'].time() if hasattr(reg_entrada['hora'], 'time') else reg_entrada['hora']
+                                    else:
+                                        # Si no se puede convertir, usar un valor predeterminado
+                                        reg_entrada_time = datetime.strptime("00:00:00", "%H:%M:%S").time()
+                                        print(f"Advertencia: Formato de hora no reconocido: {reg_entrada['hora']}")
                                     
-                                if isinstance(reg_salida['hora'], str):
-                                    reg_salida_time = datetime.strptime(reg_salida['hora'], "%H:%M:%S").time()
-                                else:
-                                    reg_salida_time = reg_salida['hora']
+                                    if isinstance(reg_salida['hora'], str):
+                                        reg_salida_time = datetime.strptime(reg_salida['hora'], "%H:%M:%S").time()
+                                    elif hasattr(reg_salida['hora'], 'strftime'):
+                                        reg_salida_time = reg_salida['hora'].time() if hasattr(reg_salida['hora'], 'time') else reg_salida['hora']
+                                    else:
+                                        # Si no se puede convertir, usar un valor predeterminado
+                                        reg_salida_time = datetime.strptime("23:59:59", "%H:%M:%S").time()
+                                        print(f"Advertencia: Formato de hora no reconocido: {reg_salida['hora']}")
+                                except Exception as e:
+                                    print(f"Error convirtiendo horas de registro: {e}")
+                                    # Valores predeterminados para evitar errores
+                                    reg_entrada_time = datetime.strptime("00:00:00", "%H:%M:%S").time()
+                                    reg_salida_time = datetime.strptime("23:59:59", "%H:%M:%S").time()
                                 
                                 # CAMBIO PRINCIPAL: Verificar si la entrada-salida cubre el bloque
-                                # Caso 1: Entrada antes del inicio y salida después del inicio
-                                caso1 = reg_entrada_time <= hora_entrada_dt and reg_salida_time > hora_entrada_dt
-                                
-                                # Caso 2: Entrada después del inicio pero antes del fin
-                                caso2 = (reg_entrada_time > hora_entrada_dt and 
-                                         reg_entrada_time < hora_salida_dt)
-                                
-                                # Caso 3: Salida después del fin pero entrada antes del fin
-                                caso3 = reg_salida_time >= hora_salida_dt and reg_entrada_time < hora_salida_dt
-                                
-                                # Caso 4: Completamente dentro del bloque
-                                caso4 = (reg_entrada_time >= hora_entrada_dt and 
-                                         reg_salida_time <= hora_salida_dt)
-                                
-                                # Si cualquier caso es cierto, el bloque está cubierto
-                                if caso1 or caso2 or caso3 or caso4:
-                                    registros_en_bloque = True
-                                    break
+                                try:
+                                    # Caso 1: Entrada antes del inicio y salida después del inicio
+                                    caso1 = reg_entrada_time <= hora_entrada_dt and reg_salida_time > hora_entrada_dt
+                                    
+                                    # Caso 2: Entrada después del inicio pero antes del fin
+                                    caso2 = (reg_entrada_time > hora_entrada_dt and 
+                                            reg_entrada_time < hora_salida_dt)
+                                    
+                                    # Caso 3: Salida después del fin pero entrada antes del fin
+                                    caso3 = reg_salida_time >= hora_salida_dt and reg_entrada_time < hora_salida_dt
+                                    
+                                    # Caso 4: Completamente dentro del bloque
+                                    caso4 = (reg_entrada_time >= hora_entrada_dt and 
+                                            reg_salida_time <= hora_salida_dt)
+                                    
+                                    # Si cualquier caso es cierto, el bloque está cubierto
+                                    if caso1 or caso2 or caso3 or caso4:
+                                        registros_en_bloque = True
+                                        break
+                                except Exception as e:
+                                    print(f"Error verificando casos de cobertura: {e}")
+                                    # No marcar como cubierto si hay errores en la comparación
                         
                         # Si es el día actual y la hora actual está dentro del bloque
                         if h['dia'].lower() == dia_actual_esp:
-                            hora_actual_dt = datetime.strptime(hora_actual, "%H:%M:%S").time()
-                            
-                            if registros_en_bloque:
-                                # Ya hay registros que cubren el bloque
-                                if hora_actual_dt < hora_entrada_dt:
-                                    bloque_estado = "Pendiente"
-                                elif hora_entrada_dt <= hora_actual_dt < hora_salida_dt:
-                                    bloque_estado = "Cumpliendo"
-                                else:  # hora_actual >= hora_salida
-                                    bloque_estado = "Cumplido"
-                                    cumplidos += 1
-                            else:
-                                # No hay registros que cubran el bloque
-                                if hora_actual_dt < hora_entrada_dt:
-                                    bloque_estado = "Pendiente"
-                                elif hora_entrada_dt <= hora_actual_dt < hora_salida_dt:
-                                    bloque_estado = "Atrasado"
+                            try:
+                                hora_actual_dt = datetime.strptime(hora_actual, "%H:%M:%S").time()
+                                
+                                if registros_en_bloque:
+                                    # Ya hay registros que cubren el bloque
+                                    if hora_actual_dt < hora_entrada_dt:
+                                        bloque_estado = "Pendiente"
+                                    elif hora_entrada_dt <= hora_actual_dt < hora_salida_dt:
+                                        bloque_estado = "Cumpliendo"
+                                    else:  # hora_actual >= hora_salida
+                                        bloque_estado = "Cumplido"
+                                        cumplidos += 1
                                 else:
-                                    bloque_estado = "Ausente"
+                                    # No hay registros que cubran el bloque
+                                    if hora_actual_dt < hora_entrada_dt:
+                                        bloque_estado = "Pendiente"
+                                    elif hora_entrada_dt <= hora_actual_dt < hora_salida_dt:
+                                        bloque_estado = "Atrasado"
+                                    else:
+                                        bloque_estado = "Ausente"
+                            except Exception as e:
+                                print(f"Error procesando hora_actual: {e}")
+                                # Asignar un estado predeterminado para evitar errores
+                                bloque_estado = "Error"
                         else:
                             # No es el día actual
                             if registros_en_bloque:
@@ -350,13 +397,18 @@ def get_cumplimiento():
                     else:
                         # No hay registros para este día/bloque
                         if h['dia'].lower() == dia_actual_esp:
-                            hora_actual_dt = datetime.strptime(hora_actual, "%H:%M:%S").time()
-                            if hora_actual_dt < hora_entrada_dt:
-                                bloque_estado = "Pendiente"
-                            elif hora_actual_dt >= hora_entrada_dt and hora_actual_dt < hora_salida_dt:
-                                bloque_estado = "Atrasado"
-                            else:
-                                bloque_estado = "Ausente"
+                            try:
+                                hora_actual_dt = datetime.strptime(hora_actual, "%H:%M:%S").time()
+                                if hora_actual_dt < hora_entrada_dt:
+                                    bloque_estado = "Pendiente"
+                                elif hora_actual_dt >= hora_entrada_dt and hora_actual_dt < hora_salida_dt:
+                                    bloque_estado = "Atrasado"
+                                else:
+                                    bloque_estado = "Ausente"
+                            except Exception as e:
+                                print(f"Error procesando hora_actual para bloque sin registros: {e}")
+                                # Asignar un estado predeterminado
+                                bloque_estado = "Error"
                         else:
                             bloque_estado = "Ausente"
                             
