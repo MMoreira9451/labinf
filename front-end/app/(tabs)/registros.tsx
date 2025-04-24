@@ -19,7 +19,7 @@ export default function RegistrosScreen() {
     setLoading(true);
     setError(null);
     
-    fetch(`http://10.0.3.54:5000/registros_hoy`)
+    fetch(`https://acceso.informaticauaint.com/api/registros_hoy`)
       .then(res => {
         if (!res.ok) {
           throw new Error(`Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
