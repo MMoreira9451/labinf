@@ -4,10 +4,18 @@ from flask_cors import CORS
 import pymysql
 from datetime import datetime, timedelta, date
 import json
-import ssl  # Importamos el módulo SSL
+import ssl
+import pytz  # Add pytz library for timezone management
+
+# Define your timezone
+TIMEZONE = pytz.timezone('America/Santiago')  # Change this to your timezone
 
 app = Flask(__name__)
 CORS(app)
+
+# Custom function to get current time in the correct timezone
+def get_current_datetime():
+    return datetime.now(pytz.utc).astimezone(TIMEZONE)
 
 # Clase para manejar la serialización de objetos datetime y timedelta
 class CustomJSONEncoder(json.JSONEncoder):
@@ -34,7 +42,7 @@ app.json = CustomJSONProvider(app)
 
 # --- CONFIGURACIÓN DE CONEXIÓN ---
 DB_CONFIG = {
-    'host': '10.0.3.54',  # Actualizado a la nueva IP
+    'host': '10.0.3.54',
     'user': 'mm',
     'password': 'Gin160306',
     'database': 'registro_qr',
@@ -72,12 +80,12 @@ def get_registros():
         return jsonify({"error": str(e)}), 500
 
 # --- ENDPOINT: Registros de Hoy ---
-# --- ENDPOINT: Registros de Hoy ---
 @app.route('/registros_hoy', methods=['GET'])
 def get_registros_hoy():
     try:
         conn = get_connection()
-        today = datetime.now().strftime('%Y-%m-%d')
+        # Use our timezone-aware function instead of datetime.now()
+        today = get_current_datetime().strftime('%Y-%m-%d')
         
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -119,8 +127,8 @@ def add_registro():
     try:
         conn = get_connection()
         with conn.cursor() as cursor:
-            # Obtener fecha y hora actuales si no se proporcionan
-            now = datetime.now()
+            # Obtener fecha y hora actuales con la zona horaria correcta
+            now = get_current_datetime()
             fecha = data.get('fecha', now.strftime("%Y-%m-%d"))
             hora = data.get('hora', now.strftime("%H:%M:%S"))
             
@@ -207,8 +215,8 @@ def get_cumplimiento():
                 'sunday': 'domingo'
             }
             
-            # Obtener información de fecha actual una sola vez
-            now = datetime.now()
+            # Obtener información de fecha actual con la zona horaria correcta
+            now = get_current_datetime()
             dia_actual = now.strftime('%A').lower()  # Día en inglés: 'monday', 'tuesday', etc.
             dia_actual_esp = dias_traduccion.get(dia_actual, dia_actual)
             hora_actual = now.strftime('%H:%M:%S')
@@ -312,7 +320,8 @@ def get_cumplimiento():
 def get_ayudantes_presentes():
     try:
         conn = get_connection()
-        today = datetime.now().strftime('%Y-%m-%d')
+        # Use timezone-aware function
+        today = get_current_datetime().strftime('%Y-%m-%d')
         
         with conn.cursor() as cursor:
             # Obtenemos todos los registros de hoy ordenados por email y hora
@@ -399,7 +408,6 @@ def get_ayudantes_presentes():
         print(f"Error al obtener ayudantes presentes: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# --- ENDPOINT: Horas acumuladas ---
 # --- ENDPOINT: Horas acumuladas mejorado ---
 @app.route('/horas_acumuladas', methods=['GET'])
 def get_horas_acumuladas():
@@ -622,13 +630,8 @@ def get_horas_detalle(email):
 
 if __name__ == '__main__':
     # Definir rutas a los certificados
-    # Opción 1: Rutas absolutas
-    cert_path = 'certificate.pem'  # Actualiza esta ruta
-    key_path = 'privatekey.pem'    # Actualiza esta ruta
-    
-    # Opción 2: Rutas relativas al directorio del script
-    # cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certificate.pem')
-    # key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'privatekey.pem')
+    cert_path = 'certificate.pem'
+    key_path = 'privatekey.pem'
     
     # Verificar que los archivos de certificado existen
     if not os.path.exists(cert_path) or not os.path.exists(key_path):
@@ -654,4 +657,4 @@ if __name__ == '__main__':
         exit(1)
     
     print("Iniciando servidor HTTPS en 10.0.3.54:5000")
-    app.run(debug=True, host='10.0.3.54', port=5000, ssl_context=context)
+    app.run(debug=True, host='0.0.0.0', ssl_context=context)
