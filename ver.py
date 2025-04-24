@@ -380,99 +380,112 @@ class LectorQR(BackgroundLayout):
             }
             dia_esp = dias_traduccion.get(dia, dia)
     
-            # Determinar si es entrada o salida
-            # Primero verificamos si la columna tipo existe
-            # Si la columna se llama 'metodo' en la base de datos pero en tu código buscas 'tipo'
+            # Verificar qué columnas existen en la tabla registros
+            cursor.execute("""
+                SELECT COLUMN_NAME
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'registros' 
+                AND (COLUMN_NAME = 'metodo' OR COLUMN_NAME = 'tipo')
+            """, (self.db_config['database'],))
+            
+            column_info = cursor.fetchone()
+            tipo_column_name = column_info['COLUMN_NAME'] if column_info else None
+            
+            # Verificar si existe la columna timestamp
             cursor.execute("""
                 SELECT COUNT(*) as exists_column 
                 FROM information_schema.COLUMNS 
                 WHERE TABLE_SCHEMA = %s 
                 AND TABLE_NAME = 'registros' 
-                AND COLUMN_NAME = 'metodo'  # Cambia 'tipo' por 'metodo' si es necesario
+                AND COLUMN_NAME = 'timestamp'
             """, (self.db_config['database'],))
             
-            column_exists = cursor.fetchone()
-            
-            if column_exists and column_exists['exists_column'] > 0:
-                # Si la columna existe, verificamos el último registro
+            timestamp_exists = cursor.fetchone()['exists_column'] > 0
+    
+            # Determinar si es entrada o salida
+            if tipo_column_name == 'tipo':
                 cursor.execute('''
                     SELECT tipo FROM registros 
                     WHERE email = %s AND fecha = %s 
                     ORDER BY id DESC LIMIT 1
                 ''', (db_email, fecha))
+                ultimo_registro = cursor.fetchone()
+                tipo = "Salida" if (ultimo_registro and ultimo_registro['tipo'] == "Entrada") else "Entrada"
+            elif tipo_column_name == 'metodo':
+                cursor.execute('''
+                    SELECT metodo FROM registros 
+                    WHERE email = %s AND fecha = %s 
+                    ORDER BY id DESC LIMIT 1
+                ''', (db_email, fecha))
+                ultimo_registro = cursor.fetchone()
+                tipo = "Salida" if (ultimo_registro and ultimo_registro['metodo'] == "Entrada") else "Entrada"
             else:
-                # Si la columna no existe, verificamos cuántos registros hay hoy
-                # para alternar entre entrada/salida
+                # Si no existe ninguna de esas columnas, alternamos basado en el número de registros
                 cursor.execute('''
                     SELECT COUNT(*) as count_registros
                     FROM registros 
                     WHERE email = %s AND fecha = %s
                 ''', (db_email, fecha))
-            
-            # Determinar tipo de registro (entrada/salida)
-            tipo = "Entrada"
-            
-            if column_exists and column_exists['exists_column'] > 0:
-                # Si la columna existe
-                ultimo_registro = cursor.fetchone()
-                if ultimo_registro and 'tipo' in ultimo_registro:
-                    ultimo_tipo = ultimo_registro['tipo']
-                    if ultimo_tipo == "Entrada":
-                        tipo = "Salida"
-                    else:
-                        # Si el último fue salida, nueva entrada
-                        tipo = "Entrada"
-            else:
-                # Si la columna no existe, alternamos basado en el número de registros
                 count_result = cursor.fetchone()
-                if count_result and count_result['count_registros'] % 2 == 1:
-                    # Si hay un número impar de registros, el siguiente es salida
-                    tipo = "Salida"
-                else:
-                    # Si hay un número par o cero, el siguiente es entrada
-                    tipo = "Entrada"
+                tipo = "Salida" if (count_result and count_result['count_registros'] % 2 == 1) else "Entrada"
             
-            # Para MySQL, primero verificamos si la columna 'tipo' existe
+            # Inserción en la base de datos teniendo en cuenta las columnas disponibles
             try:
-                cursor.execute("""
-                    SELECT COUNT(*) as exists_column 
-                    FROM information_schema.COLUMNS 
-                    WHERE TABLE_SCHEMA = %s 
-                    AND TABLE_NAME = 'registros' 
-                    AND COLUMN_NAME = 'tipo'
-                """, (self.db_config['database'],))
-                
-                column_exists = cursor.fetchone()
-                
-                if column_exists and column_exists['exists_column'] > 0:
-                    # La columna existe, podemos usar la versión completa
-                    cursor.execute('''
-                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, tipo)
+                if tipo_column_name and timestamp_exists:
+                    # Tenemos ambas columnas (tipo/metodo y timestamp)
+                    cursor.execute(f'''
+                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, {tipo_column_name}, timestamp)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, tipo, now))
+                elif tipo_column_name:
+                    # Solo tenemos tipo/metodo pero no timestamp
+                    cursor.execute(f'''
+                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, {tipo_column_name})
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, tipo))
+                elif timestamp_exists:
+                    # Solo tenemos timestamp pero no tipo/metodo
+                    cursor.execute('''
+                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, timestamp)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, now))
                 else:
-                    # La columna no existe, usamos la versión sin 'tipo'
+                    # No tenemos ninguna columna adicional
                     cursor.execute('''
                         INSERT INTO registros (fecha, hora, dia, nombre, apellido, email)
                         VALUES (%s, %s, %s, %s, %s, %s)
                     ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email))
-                    
-                    # Intentamos agregar la columna para futuros registros
+                
+                # Si no tenemos la columna tipo/metodo, intentamos crearla
+                if not tipo_column_name:
                     try:
                         cursor.execute("""
                             ALTER TABLE registros 
-                            ADD COLUMN tipo VARCHAR(20) DEFAULT 'Entrada'
+                            ADD COLUMN metodo VARCHAR(20) DEFAULT 'Entrada'
                         """)
                         conn.commit()
-                        print("Columna 'tipo' agregada a la tabla registros")
+                        print("Columna 'metodo' agregada a la tabla registros")
                     except Exception as alter_err:
-                        # Si no podemos agregar la columna, solo lo registramos
-                        print(f"No se pudo agregar la columna 'tipo': {str(alter_err)}")
+                        print(f"No se pudo agregar la columna 'metodo': {str(alter_err)}")
+                        conn.rollback()
+                
+                # Si no tenemos la columna timestamp, intentamos crearla
+                if not timestamp_exists:
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE registros 
+                            ADD COLUMN timestamp DATETIME NULL
+                        """)
+                        conn.commit()
+                        print("Columna 'timestamp' agregada a la tabla registros")
+                    except Exception as alter_err:
+                        print(f"No se pudo agregar la columna 'timestamp': {str(alter_err)}")
                         conn.rollback()
                 
             except Exception as e:
-                # Si ocurre cualquier error, intentamos la inserción sin la columna tipo
-                print(f"Error al verificar columna 'tipo': {str(e)}")
+                # Si ocurre cualquier error, intentamos la inserción básica
+                print(f"Error en inserción: {str(e)}")
                 cursor.execute('''
                     INSERT INTO registros (fecha, hora, dia, nombre, apellido, email)
                     VALUES (%s, %s, %s, %s, %s, %s)
@@ -661,26 +674,26 @@ class LectorQR(BackgroundLayout):
             self.status_label.text = "Escáner en pausa"
     
     def quit_app(self, instance):
-        # Liberar la cámara
-        self.capture.release()
-        # Desactivar cualquier Clock Schedule
-        Clock.unschedule(self.update)
-        Clock.unschedule(self.reset_status_color)
-        # Salir de la aplicación
-        App.get_running_app().stop()
-        # Para evitar el error al cerrar, forzamos la salida
-        sys.exit(0)
+       # Liberar la cámara
+       self.capture.release()
+       # Desactivar cualquier Clock Schedule
+       Clock.unschedule(self.update)
+       Clock.unschedule(self.reset_status_color)
+       # Salir de la aplicación
+       App.get_running_app().stop()
+       # Para evitar el error al cerrar, forzamos la salida
+       sys.exit(0)
 
 class LectorQRApp(App):
-    def build(self):
-        # Configurar los colores de la ventana
-        Window.clearcolor = get_color_from_hex(COLORS['dark_bg'])
-        return LectorQR()
+   def build(self):
+       # Configurar los colores de la ventana
+       Window.clearcolor = get_color_from_hex(COLORS['dark_bg'])
+       return LectorQR()
 
 if __name__ == '__main__':
-    try:
-        LectorQRApp().run()
-    except Exception as e:
-        print(f"Error en la aplicación: {str(e)}")
-        # Para asegurar que la app se cierre completamente
-        sys.exit(0)
+   try:
+       LectorQRApp().run()
+   except Exception as e:
+       print(f"Error en la aplicación: {str(e)}")
+       # Para asegurar que la app se cierre completamente
+       sys.exit(0)
