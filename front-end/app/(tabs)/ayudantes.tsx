@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, FlatList, Platform, RefreshControl, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 
-// Usar una constante directa para la URL de la API
+// Usar una constante directa para la URL de la API - con HTTPS
 const API_BASE = 'https://acceso.informaticauaint.com/api';
 
 export default function AyudantesScreen() {
@@ -28,7 +28,19 @@ export default function AyudantesScreen() {
       })
       .then(data => {
         console.log("Datos recibidos:", data);
-        setAyudantes(Array.isArray(data) ? data : []);
+        
+        // Sanitizar y validar los datos recibidos
+        const sanitizedData = Array.isArray(data) ? data.map(ayudante => ({
+          id: ayudante.id || `aid-${Math.random().toString(36).substring(2, 9)}`,
+          nombre: ayudante.nombre || 'Sin nombre',
+          apellido: ayudante.apellido || 'Sin apellido',
+          email: ayudante.email || 'sin-email@example.com',
+          ultima_entrada: ayudante.ultima_entrada || '--:--',
+          foto_url: ayudante.foto_url || null,
+          estado: ayudante.estado || 'dentro'
+        })) : [];
+        
+        setAyudantes(sanitizedData);
         setLastUpdated(new Date());
         setRefreshing(false);
         setLoading(false);
@@ -45,7 +57,7 @@ export default function AyudantesScreen() {
 
   useEffect(() => {
     loadAyudantes();
-    const interval = setInterval(loadAyudantes, 120000);
+    const interval = setInterval(loadAyudantes, 120000); // Actualizar cada 2 minutos
     return () => clearInterval(interval);
   }, []);
 
@@ -57,6 +69,25 @@ export default function AyudantesScreen() {
     const nombreInit = nombre && nombre.charAt(0) ? nombre.charAt(0) : '';
     const apellidoInit = apellido && apellido.charAt(0) ? apellido.charAt(0) : '';
     return (nombreInit + apellidoInit).toUpperCase();
+  };
+
+  // Función para formatear el tiempo de entrada
+  const formatEntryTime = (timeString) => {
+    if (!timeString || timeString === '--:--') {
+      return 'Hora no disponible';
+    }
+    
+    try {
+      // Si es una fecha ISO, extraer solo la parte de la hora
+      if (timeString.includes('T')) {
+        const date = new Date(timeString);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+      return timeString;
+    } catch (e) {
+      console.warn('Error formatting time:', e);
+      return timeString;
+    }
   };
 
   // Mostrar indicador de carga mientras se cargan los datos
@@ -107,12 +138,22 @@ export default function AyudantesScreen() {
                   <Image
                     source={{ uri: item.foto_url }}
                     style={styles.avatarImage}
+                    onError={(e) => console.log('Error loading image:', e.nativeEvent.error)}
                   />
                 ) : null}
               </View>
-              <Text style={styles.ayudanteNombre}>{item.nombre}</Text>
-              <Text style={styles.ayudanteApellido}>{item.apellido}</Text>
-              <Text style={styles.ayudanteEntrada}>Entrada: {item.ultima_entrada}</Text>
+              <Text style={styles.ayudanteNombre}>{item.nombre || 'Sin nombre'}</Text>
+              <Text style={styles.ayudanteApellido}>{item.apellido || 'Sin apellido'}</Text>
+              <View style={styles.entradaContainer}>
+                <Text style={styles.ayudanteEntrada}>
+                  Entrada: {formatEntryTime(item.ultima_entrada)}
+                </Text>
+                <View style={styles.estadoBadge}>
+                  <Text style={styles.estadoText}>
+                    {item.estado === 'dentro' ? 'Presente' : 'Ausente'}
+                  </Text>
+                </View>
+              </View>
             </View>
           )}
           refreshControl={
@@ -235,10 +276,25 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     textAlign: 'center',
   },
+  entradaContainer: {
+    marginTop: 5,
+    alignItems: 'center',
+  },
   ayudanteEntrada: {
     fontSize: 12,
     color: '#666',
-    marginTop: 5,
+    marginBottom: 5,
+  },
+  estadoBadge: {
+    backgroundColor: '#27ae60',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  estadoText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   emptyContainer: {
     flex: 1,

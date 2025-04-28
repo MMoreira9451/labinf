@@ -3,8 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, FlatList, RefreshControl, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { Platform } from 'react-native';
 
-// Usar https para todas las conexiones API
-const API_BASE = 'http://acceso.informaticauaint.com/api';
+// Usar HTTPS para todas las conexiones API
+const API_BASE = 'https://acceso.informaticauaint.com/api';
 
 export default function RegistrosScreen() {
   const [registros, setRegistros] = useState([]);
@@ -37,7 +37,9 @@ export default function RegistrosScreen() {
           dia: registro.dia || '',
           nombre: registro.nombre || 'Sin nombre',
           apellido: registro.apellido || 'Sin apellido',
-          email: registro.email || 'sin-email@example.com'
+          email: registro.email || 'sin-email@example.com',
+          tipo: registro.tipo || '',
+          estado: registro.estado || ''
         }));
         
         setRegistros(sanitizedRegistros);
@@ -99,15 +101,23 @@ export default function RegistrosScreen() {
     ? registros.filter(item => item && item.email === filtroPersona)
     : registros;
 
-  const getRegistroTipo = (registro, todosRegistros) => {
+  // La función getRegistroTipo ahora obtiene directamente el tipo del registro
+  // o utiliza la lógica anterior como fallback si no está disponible
+  const getRegistroTipo = (registro) => {
+    // Si el registro ya tiene un tipo definido (de la base de datos), usarlo
+    if (registro.tipo && (registro.tipo === 'Entrada' || registro.tipo === 'Salida')) {
+      return registro.tipo;
+    }
+    
+    // Lógica de fallback si no hay un tipo definido
     // Validar entradas
-    if (!registro || !registro.email || !Array.isArray(todosRegistros) || todosRegistros.length === 0) {
+    if (!registro || !registro.email || !Array.isArray(registros) || registros.length === 0) {
       return 'Desconocido';
     }
     
     try {
       // Filtrar registros válidos de la misma persona
-      const registrosPersona = todosRegistros
+      const registrosPersona = registros
         .filter(r => r && r.email === registro.email && r.hora)
         .sort((a, b) => {
           try {
@@ -206,8 +216,11 @@ export default function RegistrosScreen() {
                   {item.nombre || ''} {item.apellido || ''}
                 </Text>
                 <Text style={styles.registroHora}>{item.hora || '--:--'}</Text>
-                <Text style={styles.registroTipo}>
-                  {getRegistroTipo(item, filteredRegistros)}
+                <Text style={[
+                  styles.registroTipo,
+                  item.tipo === 'Entrada' ? styles.entradaText : styles.salidaText
+                ]}>
+                  {item.tipo || getRegistroTipo(item)}
                 </Text>
               </View>
             ) : null
@@ -303,6 +316,12 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
     fontWeight: '500',
+  },
+  entradaText: {
+    color: '#27ae60',  // Color verde para entradas
+  },
+  salidaText: {
+    color: '#e67e22',  // Color naranja para salidas
   },
   lastUpdate: {
     textAlign: 'center',
