@@ -131,7 +131,23 @@ def add_registro():
             now = get_current_datetime()
             fecha = data.get('fecha', now.strftime("%Y-%m-%d"))
             hora = data.get('hora', now.strftime("%H:%M:%S"))
-            timestamp = now
+            timestamp_value = data.get('timestamp', None)
+
+            if timestamp_value:
+    # Si timestamp_value es un número y parece ser en milisegundos (más de 11 dígitos)
+                if isinstance(timestamp_value, int) and timestamp_value > 1e11:
+                    timestamp = datetime.fromtimestamp(timestamp_value / 1000)
+                elif isinstance(timestamp_value, str) and timestamp_value.isdigit() and len(timestamp_value) > 11:
+                    timestamp = datetime.fromtimestamp(int(timestamp_value) / 1000)
+                else:
+        # Si ya es formato datetime o ISO string
+                    try:
+                        timestamp = datetime.fromisoformat(timestamp_value)
+                    except Exception:
+                        timestamp = now
+            else:
+                timestamp = now
+
             
             # Mapeo de días de la semana (inglés -> español)
             dias = {
