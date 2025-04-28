@@ -315,20 +315,26 @@ def get_cumplimiento():
                     bloque_estado = "Ausente"  # Estado por defecto
                     
                     # CAMBIO: Obtener todos los registros del día para este bloque
+                    # Obtener fecha de inicio de semana (lunes)
+                    start_of_week = now - timedelta(days=now.weekday())
+                    start_of_week_str = start_of_week.strftime('%Y-%m-%d')
+
                     if h['dia'].lower() == dia_actual_esp:
-                        # Para el día actual, verificamos en la fecha actual
+    # Para el día actual, usa la fecha actual
                         cursor.execute("""
                             SELECT * FROM registros
                             WHERE email = %s AND fecha = %s
                             ORDER BY hora
                         """, (user['email'], fecha_actual))
                     else:
-                        # Para otros días, obtenemos registros históricos (de las últimas 2 semanas)
+    # Para otros días, buscar sólo en esta semana
                         cursor.execute("""
                             SELECT * FROM registros
-                            WHERE email = %s AND dia = %s AND fecha >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+                            WHERE email = %s AND dia = %s 
+                            AND fecha BETWEEN %s AND %s
                             ORDER BY fecha DESC, hora
-                        """, (user['email'], h['dia']))
+                        """, (user['email'], h['dia'], start_of_week_str, fecha_actual))
+
                     
                     registros_del_dia = cursor.fetchall()
                     
