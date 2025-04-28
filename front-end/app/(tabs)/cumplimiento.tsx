@@ -16,7 +16,7 @@ const Cumplimiento = () => {
     setLoading(true);
     setError(null);
     
-    fetch('http://acceso.informaticauaint.com/api/cumplimiento')
+    fetch('https://acceso.informaticauaint.com/api/cumplimiento')
       .then(response => {
         if (!response.ok) {
           throw new Error('No se pudo conectar al servidor');
