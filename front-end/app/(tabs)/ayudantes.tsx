@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, FlatList, Platform, RefreshControl, Image, ActivityIndicator, TouchableOpacity } from 'react-native';
 
 // Usar una constante directa para la URL de la API - con HTTPS
-const API_BASE = 'https://acceso.informaticauaint.com/api';
+const API_BASE = 'http://acceso.informaticauaint.com/api';
 
 export default function AyudantesScreen() {
   const [ayudantes, setAyudantes] = useState([]);
