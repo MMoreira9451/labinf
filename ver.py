@@ -18,6 +18,13 @@ from datetime import datetime, timedelta
 import pymysql
 import unicodedata
 import sys
+import requests
+import threading
+import urllib3
+from datetime import datetime
+
+# Deshabilitar advertencias de SSL para desarrollo (en producción, usar certificados válidos)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Definir colores para la interfaz
 COLORS = {
@@ -33,6 +40,12 @@ COLORS = {
     'button': '#3498db',       # Color de botón
     'entry': '#27ae60',        # Color para entrada
     'exit': '#e67e22'          # Color para salida
+}
+
+# Configuración de la API
+API_CONFIG = {
+    'base_url': 'https://acceso.informaticauaint.com/api',
+    'verify_ssl': False  # Para desarrollo, en producción debería ser True
 }
 
 class BackgroundLayout(BoxLayout):
@@ -77,11 +90,194 @@ class LectorQR(BackgroundLayout):
             'cursorclass': pymysql.cursors.DictCursor
         }
         
+        # Cache para información de horarios y estado
+        self.usuario_cache = {}
+        self.cache_valid_time = 60  # segundos
+        self.last_cache_update = 0
+        
+        # Verificar y crear tablas necesarias
+        self.verificar_tablas()
+        
         # Crear la interfaz de usuario
         self.setup_ui()
         
         # Iniciar la actualización de la cámara
         Clock.schedule_interval(self.update, 1.0 / 30.0)  # 30 FPS
+        
+        # Iniciar hilo para actualizar cache de datos periódicamente
+        threading.Thread(target=self.actualizar_cache_periodicamente, daemon=True).start()
+    
+    def verificar_tablas(self):
+        """Verifica que existan las tablas necesarias y las crea si no existen"""
+        try:
+            conn = self.get_db_connection()
+            if not conn:
+                print("No se pudo conectar a la base de datos para verificar tablas")
+                return
+                
+            cursor = conn.cursor()
+            
+            # Verificar si existe la tabla estado_usuarios
+            cursor.execute("""
+                SELECT COUNT(*) as exists_table
+                FROM information_schema.TABLES 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'estado_usuarios'
+            """, (self.db_config['database'],))
+            
+            estado_table_exists = cursor.fetchone()['exists_table'] > 0
+            
+            # Si no existe, crearla
+            if not estado_table_exists:
+                try:
+                    cursor.execute("""
+                        CREATE TABLE estado_usuarios (
+                            email VARCHAR(100) PRIMARY KEY,
+                            nombre VARCHAR(100),
+                            apellido VARCHAR(100),
+                            estado ENUM('dentro', 'fuera') DEFAULT 'fuera',
+                            ultima_entrada DATETIME NULL,
+                            ultima_salida DATETIME NULL,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                        )
+                    """)
+                    conn.commit()
+                    print("Tabla 'estado_usuarios' creada exitosamente")
+                    
+                    # Inicializar con usuarios activos
+                    cursor.execute("""
+                        INSERT INTO estado_usuarios (email, nombre, apellido, estado)
+                        SELECT email, nombre, apellido, 'fuera' 
+                        FROM usuarios_permitidos 
+                        WHERE activo = 1
+                    """)
+                    conn.commit()
+                    print("Tabla 'estado_usuarios' inicializada con usuarios activos")
+                    
+                except Exception as create_err:
+                    print(f"Error al crear tabla 'estado_usuarios': {str(create_err)}")
+                    conn.rollback()
+            
+            # Verificar columnas en tabla registros
+            cursor.execute("""
+                SELECT COUNT(*) as exists_column 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'registros' 
+                AND COLUMN_NAME = 'tipo'
+            """, (self.db_config['database'],))
+            
+            tipo_exists = cursor.fetchone()['exists_column'] > 0
+            
+            if not tipo_exists:
+                try:
+                    cursor.execute("""
+                        ALTER TABLE registros 
+                        ADD COLUMN tipo VARCHAR(20) DEFAULT 'Entrada'
+                    """)
+                    conn.commit()
+                    print("Columna 'tipo' agregada a la tabla registros")
+                except Exception as alter_err:
+                    print(f"No se pudo agregar la columna 'tipo': {str(alter_err)}")
+                    conn.rollback()
+            
+            cursor.execute("""
+                SELECT COUNT(*) as exists_column 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'registros' 
+                AND COLUMN_NAME = 'timestamp'
+            """, (self.db_config['database'],))
+            
+            timestamp_exists = cursor.fetchone()['exists_column'] > 0
+            
+            if not timestamp_exists:
+                try:
+                    cursor.execute("""
+                        ALTER TABLE registros 
+                        ADD COLUMN timestamp DATETIME NULL
+                    """)
+                    conn.commit()
+                    print("Columna 'timestamp' agregada a la tabla registros")
+                except Exception as alter_err:
+                    print(f"No se pudo agregar la columna 'timestamp': {str(alter_err)}")
+                    conn.rollback()
+            
+            cursor.execute("""
+                SELECT COUNT(*) as exists_column 
+                FROM information_schema.COLUMNS 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME = 'registros' 
+                AND COLUMN_NAME = 'auto_generado'
+            """, (self.db_config['database'],))
+            
+            auto_generado_exists = cursor.fetchone()['exists_column'] > 0
+            
+            if not auto_generado_exists:
+                try:
+                    cursor.execute("""
+                        ALTER TABLE registros 
+                        ADD COLUMN auto_generado BOOLEAN DEFAULT FALSE
+                    """)
+                    conn.commit()
+                    print("Columna 'auto_generado' agregada a la tabla registros")
+                except Exception as alter_err:
+                    print(f"No se pudo agregar la columna 'auto_generado': {str(alter_err)}")
+                    conn.rollback()
+            
+            conn.close()
+        except Exception as e:
+            print(f"Error al verificar tablas: {str(e)}")
+    
+    def actualizar_cache_periodicamente(self):
+        """Actualiza el cache de datos de la API periódicamente"""
+        while True:
+            try:
+                self.actualizar_cache_datos()
+                time.sleep(60)  # Actualizar cada minuto
+            except Exception as e:
+                print(f"Error actualizando cache: {str(e)}")
+                time.sleep(10)  # Reintentar después de 10 segundos si hay error
+    
+    def actualizar_cache_datos(self):
+        """Actualiza el cache con datos de la API"""
+        try:
+            # Obtener datos de cumplimiento
+            response = requests.get(f"{API_CONFIG['base_url']}/cumplimiento", 
+                                    verify=API_CONFIG['verify_ssl'])
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Guardar en cache datos de cada usuario
+                for user in data:
+                    email = user.get('email')
+                    if email:
+                        self.usuario_cache[email] = {
+                            'estado': user.get('estado'),
+                            'bloques': user.get('bloques', []),
+                            'bloques_info': user.get('bloques_info', []),
+                            'ultima_actualizacion': time.time()
+                        }
+            
+            # Obtener datos de ayudantes presentes
+            response = requests.get(f"{API_CONFIG['base_url']}/ayudantes_presentes", 
+                                    verify=API_CONFIG['verify_ssl'])
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Actualizar el estado "presente" en el cache
+                presentes = {user.get('email'): True for user in data}
+                
+                for email in self.usuario_cache:
+                    self.usuario_cache[email]['presente'] = presentes.get(email, False)
+            
+            # Actualizar timestamp del último cache
+            self.last_cache_update = time.time()
+            
+        except Exception as e:
+            print(f"Error al obtener datos de la API: {str(e)}")
     
     def get_db_connection(self):
         """Establece y retorna una conexión a la base de datos MySQL"""
@@ -90,6 +286,21 @@ class LectorQR(BackgroundLayout):
             return conn
         except Exception as e:
             print(f"Error de conexión a MySQL: {str(e)}")
+            return None
+    
+    def get_api_data(self, endpoint, params=None):
+        """Obtiene datos de la API"""
+        try:
+            url = f"{API_CONFIG['base_url']}/{endpoint}"
+            response = requests.get(url, params=params, verify=API_CONFIG['verify_ssl'])
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Error en API: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            print(f"Error conectando con API: {str(e)}")
             return None
     
     def normalize_text(self, text):
@@ -292,233 +503,95 @@ class LectorQR(BackgroundLayout):
             print(f"Error processing QR: {str(e)}")
             self.mostrar_resultado(False, "Error", f"Error al procesar el QR: {str(e)}")
     
-    def verificar_usuario_db(self, nombre, apellido, email):
-        conn = None
+    def verificar_usuario_db(self, nombre: str, apellido: str, email: str):
+    
+        conn = self.get_db_connection()
+        if not conn:
+            return {"success": False, "error": "No se pudo conectar a la base de datos"}
+    
         try:
-            # Connect to database
-            conn = self.get_db_connection()
-            if not conn:
-                return {"success": False, "error": "No se pudo conectar a la base de datos"}
-            
             cursor = conn.cursor()
     
-            # Normalize user data from QR
-            norm_nombre = self.normalize_text(nombre)
-            norm_apellido = self.normalize_text(apellido)
-            norm_email = self.normalize_text(email)
-    
-            # Add logs for debugging
-            print(f"QR Data after normalization - Nombre: {norm_nombre}, Apellido: {norm_apellido}, Email: {norm_email}")
-    
-            # Check if user is allowed
-            cursor.execute("SELECT id, nombre, apellido, email FROM usuarios_permitidos WHERE activo = 1")
-            all_permitted_users = cursor.fetchall()
-    
-            is_permitted = False
-            matching_user = None
-    
-            for user in all_permitted_users:
-                # En MySQL con DictCursor, user es un diccionario
-                db_id = user['id']
-                db_nombre = user['nombre']
-                db_apellido = user['apellido']
-                db_email = user['email']
-        
-                # Normalize database data
-                norm_db_nombre = self.normalize_text(db_nombre)
-                norm_db_apellido = self.normalize_text(db_apellido)
-                norm_db_email = self.normalize_text(db_email)
-        
-                # Print for debugging
-                print(f"DB User - ID: {db_id}, Nombre: {norm_db_nombre}, Apellido: {norm_db_apellido}, Email: {norm_db_email}")
-        
-                # Email is the most reliable identifier, try that first
-                if norm_db_email == norm_email:
-                    is_permitted = True
-                    matching_user = user
-                    break
-        
-                # If email doesn't match exactly, try with name and surname
-                elif (norm_db_nombre == norm_nombre and norm_db_apellido == norm_apellido):
-                    is_permitted = True
-                    matching_user = user
-                    break
-            
-                # Even more relaxed matching - if both name and email partially match
-                elif (norm_db_email.find(norm_email) != -1 or norm_email.find(norm_db_email) != -1) and \
-                     (norm_db_nombre.find(norm_nombre) != -1 or norm_nombre.find(norm_db_nombre) != -1):
-                    is_permitted = True
-                    matching_user = user
-                    break
-    
-            if not is_permitted:
-                if conn:
-                    conn.close()
+            # 1) Buscar usuario activo por email
+            cursor.execute(
+                "SELECT id, nombre, apellido, email "
+                "FROM usuarios_permitidos "
+                "WHERE activo = 1 AND LOWER(email) = %s",
+                (email.lower(),)
+            )
+            user = cursor.fetchone()
+            if not user:
                 return {"success": False, "error": "Usuario no permitido"}
     
-            # If user is allowed, use DB data for registration
-            db_id = matching_user['id']
-            db_nombre = matching_user['nombre']
-            db_apellido = matching_user['apellido']
-            db_email = matching_user['email']
+            db_email    = user["email"]
+            db_nombre   = user["nombre"]
+            db_apellido = user["apellido"]
     
-            # Register entry/exit
-            now = datetime.now()
-            fecha = now.strftime("%Y-%m-%d")
-            hora = now.strftime("%H:%M:%S")
-            dia = now.strftime("%A").lower()  # Día en inglés
-            
-            # Traducir día a español si es necesario
-            dias_traduccion = {
-                'monday': 'lunes', 
-                'tuesday': 'martes', 
-                'wednesday': 'miércoles',
-                'thursday': 'jueves', 
-                'friday': 'viernes', 
-                'saturday': 'sábado', 
-                'sunday': 'domingo'
-            }
-            dia_esp = dias_traduccion.get(dia, dia)
-    
-            # Verificar qué columnas existen en la tabla registros
-            cursor.execute("""
-                SELECT COLUMN_NAME
-                FROM information_schema.COLUMNS 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'registros' 
-                AND (COLUMN_NAME = 'metodo' OR COLUMN_NAME = 'tipo')
-            """, (self.db_config['database'],))
-            
-            column_info = cursor.fetchone()
-            tipo_column_name = column_info['COLUMN_NAME'] if column_info else None
-            
-            # Verificar si existe la columna timestamp
-            cursor.execute("""
-                SELECT COUNT(*) as exists_column 
-                FROM information_schema.COLUMNS 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'registros' 
-                AND COLUMN_NAME = 'timestamp'
-            """, (self.db_config['database'],))
-            
-            timestamp_exists = cursor.fetchone()['exists_column'] > 0
-    
-            # Determinar si es entrada o salida
-            if tipo_column_name == 'tipo':
-                cursor.execute('''
-                    SELECT tipo FROM registros 
-                    WHERE email = %s AND fecha = %s 
-                    ORDER BY id DESC LIMIT 1
-                ''', (db_email, fecha))
-                ultimo_registro = cursor.fetchone()
-                tipo = "Salida" if (ultimo_registro and ultimo_registro['tipo'] == "Entrada") else "Entrada"
-            elif tipo_column_name == 'metodo':
-                cursor.execute('''
-                    SELECT metodo FROM registros 
-                    WHERE email = %s AND fecha = %s 
-                    ORDER BY id DESC LIMIT 1
-                ''', (db_email, fecha))
-                ultimo_registro = cursor.fetchone()
-                tipo = "Salida" if (ultimo_registro and ultimo_registro['metodo'] == "Entrada") else "Entrada"
+            # 2) Alternar estado en estado_usuarios
+            cursor.execute(
+                "SELECT estado FROM estado_usuarios WHERE email = %s",
+                (db_email,)
+            )
+            fila = cursor.fetchone()
+            if fila and fila["estado"] == "dentro":
+                tipo, nuevo_estado = "Salida", "fuera"
+                cursor.execute(
+                    "UPDATE estado_usuarios "
+                    "SET estado = %s, ultima_salida = NOW() "
+                    "WHERE email = %s",
+                    (nuevo_estado, db_email)
+                )
             else:
-                # Si no existe ninguna de esas columnas, alternamos basado en el número de registros
-                cursor.execute('''
-                    SELECT COUNT(*) as count_registros
-                    FROM registros 
-                    WHERE email = %s AND fecha = %s
-                ''', (db_email, fecha))
-                count_result = cursor.fetchone()
-                tipo = "Salida" if (count_result and count_result['count_registros'] % 2 == 1) else "Entrada"
-            
-            # Inserción en la base de datos teniendo en cuenta las columnas disponibles
-            try:
-                if tipo_column_name and timestamp_exists:
-                    # Tenemos ambas columnas (tipo/metodo y timestamp)
-                    cursor.execute(f'''
-                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, {tipo_column_name}, timestamp)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, tipo, now))
-                elif tipo_column_name:
-                    # Solo tenemos tipo/metodo pero no timestamp
-                    cursor.execute(f'''
-                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, {tipo_column_name})
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, tipo))
-                elif timestamp_exists:
-                    # Solo tenemos timestamp pero no tipo/metodo
-                    cursor.execute('''
-                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, timestamp)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, now))
-                else:
-                    # No tenemos ninguna columna adicional
-                    cursor.execute('''
-                        INSERT INTO registros (fecha, hora, dia, nombre, apellido, email)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email))
-                
-                # Si no tenemos la columna tipo/metodo, intentamos crearla
-                if not tipo_column_name:
-                    try:
-                        cursor.execute("""
-                            ALTER TABLE registros 
-                            ADD COLUMN metodo VARCHAR(20) DEFAULT 'Entrada'
-                        """)
-                        conn.commit()
-                        print("Columna 'metodo' agregada a la tabla registros")
-                    except Exception as alter_err:
-                        print(f"No se pudo agregar la columna 'metodo': {str(alter_err)}")
-                        conn.rollback()
-                
-                # Si no tenemos la columna timestamp, intentamos crearla
-                if not timestamp_exists:
-                    try:
-                        cursor.execute("""
-                            ALTER TABLE registros 
-                            ADD COLUMN timestamp DATETIME NULL
-                        """)
-                        conn.commit()
-                        print("Columna 'timestamp' agregada a la tabla registros")
-                    except Exception as alter_err:
-                        print(f"No se pudo agregar la columna 'timestamp': {str(alter_err)}")
-                        conn.rollback()
-                
-            except Exception as e:
-                # Si ocurre cualquier error, intentamos la inserción básica
-                print(f"Error en inserción: {str(e)}")
-                cursor.execute('''
-                    INSERT INTO registros (fecha, hora, dia, nombre, apellido, email)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                ''', (fecha, hora, dia_esp, db_nombre, db_apellido, db_email))
+                tipo, nuevo_estado = "Entrada", "dentro"
+                cursor.execute(
+                    "INSERT INTO estado_usuarios (email, nombre, apellido, estado, ultima_entrada) "
+                    "VALUES (%s, %s, %s, %s, NOW()) "
+                    "ON DUPLICATE KEY UPDATE "
+                    "estado = VALUES(estado), ultima_entrada = NOW()",
+                    (db_email, db_nombre, db_apellido, nuevo_estado)
+                )
+    
+            # 3) Insertar en registros OMITIENDO la columna 'timestamp'
+            now   = datetime.now()
+            fecha = now.strftime("%Y-%m-%d")
+            hora  = now.strftime("%H:%M:%S")
+    
+            # mapa inglés→español para el día
+            dias = {
+                'Monday':    'lunes', 'Tuesday':  'martes',
+                'Wednesday': 'miércoles', 'Thursday': 'jueves',
+                'Friday':    'viernes', 'Saturday': 'sábado',
+                'Sunday':    'domingo'
+            }
+            dia_ing = now.strftime("%A")
+            dia_esp = dias.get(dia_ing, dia_ing)
+    
+            cursor.execute(
+                "INSERT INTO registros "
+                "(fecha, hora, dia, nombre, apellido, email, tipo) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, tipo)
+            )
     
             conn.commit()
-            registro_id = cursor.lastrowid
-            
-            # Verificar horario (opcional)
-            horario_ok, msg_horario = self.verificar_horario(db_email, dia_esp, hora)
-            mensaje = f"{db_nombre} {db_apellido}\nFecha: {fecha} | Hora: {hora}"
-            if horario_ok:
-                mensaje += "\n✓ " + msg_horario
-            else:
-                mensaje += "\n⚠ " + msg_horario
-            
-            if conn:
-                conn.close()
     
-            return {
-                "success": True,
-                "message": mensaje,
-                "id": registro_id,
-                "fecha": fecha,
-                "hora": hora,
-                "tipo": tipo
-            }
+            # 4) Verificar horario y armar mensaje
+            horario_ok, msg = self.verificar_horario(db_email, dia_esp, hora)
+            mensaje = (
+                f"{db_nombre} {db_apellido}\n"
+                f"Fecha: {fecha} | Hora: {hora}\n"
+                + ("✓ " if horario_ok else "⚠ ") + msg
+            )
+    
+            return {"success": True, "message": mensaje, "tipo": tipo}
     
         except Exception as e:
-            print(f"Database error: {str(e)}")
-            if conn:
-                conn.close()
-            return {"success": False, "error": f"Error en base de datos: {str(e)}"}
+            conn.rollback()
+            return {"success": False, "error": f"Error BD: {e}"}
+    
+        finally:
+            conn.close()
+
     
     def verificar_horario(self, email, dia_semana, hora_actual):
         conn = None
