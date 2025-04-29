@@ -89,8 +89,9 @@ def get_registros_hoy():
         today = get_current_datetime().strftime('%Y-%m-%d')
         
         with conn.cursor() as cursor:
+            # Asegúrate de incluir explícitamente el campo 'tipo'
             cursor.execute("""
-                SELECT id, fecha, hora, dia, nombre, apellido, email
+                SELECT id, fecha, hora, dia, nombre, apellido, email, tipo
                 FROM registros 
                 WHERE fecha = %s 
                 ORDER BY hora DESC
@@ -259,6 +260,7 @@ def get_horarios():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Reemplazo para la función get_cumplimiento en api.py
 @app.route('/cumplimiento', methods=['GET'])
 def get_cumplimiento():
     try:
@@ -296,7 +298,7 @@ def get_cumplimiento():
                 )
                 horarios = cursor.fetchall()
 
-                # Si no tiene horarios, “No Aplica”
+                # Si no tiene horarios, "No Aplica"
                 if not horarios:
                     resultado.append({
                         "nombre": user['nombre'],
@@ -311,6 +313,9 @@ def get_cumplimiento():
                 bloques = []
                 bloques_info = []
                 cumplidos = 0
+                incompletos = 0
+                ausentes = 0
+                pendientes = 0
 
                 # Un bloque por cada horario
                 for h in horarios:
@@ -364,75 +369,113 @@ def get_cumplimiento():
 
                     registros_del_dia = cursor.fetchall()
 
-                    # --- Revisar pares entrada-salida para ver si cubren el bloque ---
-                    registros_en_bloque = False
-                    for i in range(0, len(registros_del_dia), 2):
-                        if i + 1 < len(registros_del_dia):
-                            r1 = registros_del_dia[i]
-                            r2 = registros_del_dia[i+1]
-
-                            # Entrada
-                            if isinstance(r1['hora'], str):
-                                t1 = datetime.strptime(r1['hora'], "%H:%M:%S").time()
-                            elif isinstance(r1['hora'], timedelta):
-                                secs = int(r1['hora'].total_seconds())
-                                t1 = time(secs//3600, (secs%3600)//60, secs%60)
+                    # --- Revisar registros de entrada y salida para determinar estado del bloque ---
+                    cumplio_bloque = False
+                    incompleto_bloque = False
+                    
+                    # Separar registros por tipo
+                    entradas = [r for r in registros_del_dia if r['tipo'] == 'Entrada']
+                    salidas = [r for r in registros_del_dia if r['tipo'] == 'Salida']
+                    
+                    # Verificar si hay al menos una entrada y una salida
+                    if entradas and salidas:
+                        for entrada in entradas:
+                            # Procesar hora de entrada
+                            if isinstance(entrada['hora'], str):
+                                t_entrada = datetime.strptime(entrada['hora'], "%H:%M:%S").time()
+                            elif isinstance(entrada['hora'], timedelta):
+                                secs = int(entrada['hora'].total_seconds())
+                                t_entrada = time(secs//3600, (secs%3600)//60, secs%60)
                             else:
-                                t1 = r1['hora']
-
-                            # Salida
-                            if isinstance(r2['hora'], str):
-                                t2 = datetime.strptime(r2['hora'], "%H:%M:%S").time()
-                            elif isinstance(r2['hora'], timedelta):
-                                secs = int(r2['hora'].total_seconds())
-                                t2 = time(secs//3600, (secs%3600)//60, secs%60)
-                            else:
-                                t2 = r2['hora']
-
-                            # Casos de cobertura
-                            caso1 = (t1 <= hora_entrada_dt and t2 > hora_entrada_dt)
-                            caso2 = (t1 > hora_entrada_dt and t1 < hora_salida_dt)
-                            caso3 = (t2 >= hora_salida_dt and t1 < hora_salida_dt)
-                            caso4 = (t1 >= hora_entrada_dt and t2 <= hora_salida_dt)
-                            if caso1 or caso2 or caso3 or caso4:
-                                registros_en_bloque = True
+                                t_entrada = entrada['hora']
+                            
+                            for salida in salidas:
+                                # Solo considerar salidas posteriores a esta entrada
+                                if salida['id'] > entrada['id']:
+                                    # Procesar hora de salida
+                                    if isinstance(salida['hora'], str):
+                                        t_salida = datetime.strptime(salida['hora'], "%H:%M:%S").time()
+                                    elif isinstance(salida['hora'], timedelta):
+                                        secs = int(salida['hora'].total_seconds())
+                                        t_salida = time(secs//3600, (secs%3600)//60, secs%60)
+                                    else:
+                                        t_salida = salida['hora']
+                                    
+                                    # Verificar si cumplió el bloque completo
+                                    # Caso 1: Entró a tiempo/antes y salió a tiempo/después
+                                    if (t_entrada <= hora_entrada_dt and t_salida >= hora_salida_dt):
+                                        cumplio_bloque = True
+                                        break
+                                    
+                                    # Caso 2: Entró tarde pero salió a tiempo/después
+                                    elif (t_entrada > hora_entrada_dt and t_entrada < hora_salida_dt and t_salida >= hora_salida_dt):
+                                        incompleto_bloque = True
+                                    
+                                    # Caso 3: Entró a tiempo/antes pero salió antes de terminar
+                                    elif (t_entrada <= hora_entrada_dt and t_salida < hora_salida_dt):
+                                        incompleto_bloque = True
+                                    
+                                    # Caso parcial: al menos estuvo parte del bloque
+                                    elif (t_entrada < hora_salida_dt and t_salida > hora_entrada_dt):
+                                        incompleto_bloque = True
+                            
+                            # Si ya encontró cumplimiento completo, salir del bucle
+                            if cumplio_bloque:
                                 break
 
                     # --- Determinar estado según día actual o no ---
                     if h['dia'].lower() == dia_actual_esp:
                         now_t = datetime.strptime(hora_actual, "%H:%M:%S").time()
-                        if registros_en_bloque:
-                            if now_t < hora_entrada_dt:
-                                bloque_estado = "Pendiente"
-                            elif hora_entrada_dt <= now_t < hora_salida_dt:
-                                bloque_estado = "Cumpliendo"
-                            else:
-                                bloque_estado = "Cumplido"
-                                cumplidos += 1
-                        else:
-                            if now_t < hora_entrada_dt:
-                                bloque_estado = "Pendiente"
-                            elif hora_entrada_dt <= now_t < hora_salida_dt:
-                                bloque_estado = "Atrasado"
-                            else:
-                                bloque_estado = "Ausente"
-                    else:
-                        if registros_en_bloque:
+                        
+                        if cumplio_bloque:
                             bloque_estado = "Cumplido"
                             cumplidos += 1
+                        elif incompleto_bloque:
+                            bloque_estado = "Incompleto"
+                            incompletos += 1
+                        elif now_t < hora_entrada_dt:
+                            bloque_estado = "Pendiente"
+                            pendientes += 1
+                        elif now_t >= hora_entrada_dt and now_t < hora_salida_dt:
+                            # Si está en el rango del bloque ahora pero no ha marcado
+                            bloque_estado = "Atrasado"
+                            incompletos += 1
+                        else:
+                            # Si ya pasó la hora y no marcó
+                            bloque_estado = "Ausente"
+                            ausentes += 1
+                    else:
+                        # Para días anteriores de la semana
+                        if cumplio_bloque:
+                            bloque_estado = "Cumplido"
+                            cumplidos += 1
+                        elif incompleto_bloque:
+                            bloque_estado = "Incompleto"
+                            incompletos += 1
                         else:
                             bloque_estado = "Ausente"
+                            ausentes += 1
 
                     bloques_info.append({
                         "bloque": bloque_label,
                         "estado": bloque_estado
                     })
 
-                # Estado general
-                if cumplidos == len(horarios):
+                # Estado general del usuario para la semana según tus criterios
+                if len(horarios) == 0:
+                    estado_usuario = "No Aplica"
+                elif pendientes > 0 and ausentes == 0 and incompletos == 0:
+                    # Si solo tiene pendientes y quizás cumplidos
+                    estado_usuario = "Pendiente"
+                elif cumplidos == len(horarios):
+                    # Si cumplió todos
                     estado_usuario = "Cumple"
-                elif cumplidos > 0:
-                    estado_usuario = "En Curso"
+                elif ausentes == len(horarios):
+                    # Si no asistió a ninguno
+                    estado_usuario = "Ausente"
+                elif incompletos > 0 or (cumplidos > 0 and ausentes > 0):
+                    # Si tiene incompletos o una mezcla de cumplidos y ausentes (REGLA IMPORTANTE)
+                    estado_usuario = "Incompleto"
                 else:
                     estado_usuario = "No Cumple"
 
@@ -451,8 +494,6 @@ def get_cumplimiento():
     except Exception as e:
         print(f"Error en cumplimiento: {e}")
         return jsonify({"error": str(e)}), 500
-
-    
     
 # --- ENDPOINT: Ayudantes presentes (modificado) ---
 @app.route('/ayudantes_presentes', methods=['GET'])
@@ -489,6 +530,7 @@ def get_ayudantes_presentes():
     
 
 # --- ENDPOINT: Horas acumuladas CORREGIDO ---
+# --- ENDPOINT: Horas acumuladas OPTIMIZADO ---
 @app.route('/horas_acumuladas', methods=['GET'])
 def get_horas_acumuladas():
     try:
@@ -503,89 +545,68 @@ def get_horas_acumuladas():
             usuarios = cursor.fetchall()
 
             resultado = []
-            HORAS_POR_DIA = 8.0
 
             for usuario in usuarios:
                 # 2) Traer todos los registros ordenados por fecha y hora
                 cursor.execute("""
-                    SELECT fecha, hora 
+                    SELECT id, fecha, hora, tipo 
                     FROM registros 
                     WHERE email = %s 
                     ORDER BY fecha, hora
                 """, (usuario['email'],))
-                todos = cursor.fetchall()
-
-                # 3) Agrupar por día
-                regs_por_dia = {}
-                for reg in todos:
-                    # formatear fecha a string YYYY-MM-DD
-                    if isinstance(reg['fecha'], date):
-                        fecha_str = reg['fecha'].strftime('%Y-%m-%d')
-                    else:
-                        fecha_str = str(reg['fecha'])
-                    regs_por_dia.setdefault(fecha_str, []).append(reg)
-
+                registros = cursor.fetchall()
+                
+                # Inicializar variables para el cálculo
                 horas_totales = 0
-                dias_procesados = set()
-
-                # 4) Procesar cada día
-                for fecha, regs in regs_por_dia.items():
-                    # ordenar por hora
-                    regs.sort(key=lambda x: x['hora'])
-
-                    # si es impar, añado salida ficticia a las 23:59:59
-                    if len(regs) % 2 != 0:
-                        ultimo = regs[-1].copy()
-                        ultimo['hora'] = "23:59:59"
-                        regs.append(ultimo)
-
-                    # 5) Calcular pares entrada–salida
-                    for i in range(0, len(regs), 2):
-                        entrada_raw = regs[i]['hora']
-                        salida_raw  = regs[i+1]['hora']
-
-                        # convertir entrada a datetime.time
-                        if isinstance(entrada_raw, timedelta):
-                            secs = int(entrada_raw.total_seconds())
-                            hh, rem = divmod(secs, 3600)
-                            mm, ss  = divmod(rem, 60)
-                            entrada_t = time(hh, mm, ss)
-                        elif isinstance(entrada_raw, str):
-                            entrada_t = datetime.strptime(entrada_raw, "%H:%M:%S").time()
-                        else:
-                            entrada_t = entrada_raw
-
-                        # convertir salida a datetime.time
-                        if isinstance(salida_raw, timedelta):
-                            secs = int(salida_raw.total_seconds())
-                            hh, rem = divmod(secs, 3600)
-                            mm, ss  = divmod(rem, 60)
-                            salida_t = time(hh, mm, ss)
-                        elif isinstance(salida_raw, str):
-                            salida_t = datetime.strptime(salida_raw, "%H:%M:%S").time()
-                        else:
-                            salida_t = salida_raw
-
-                        # combinar con fecha mínima para poder restar
-                        dt_ent = datetime.combine(datetime.min.date(), entrada_t)
-                        dt_sal = datetime.combine(datetime.min.date(), salida_t)
-
-                        if dt_sal > dt_ent:
-                            diff = dt_sal - dt_ent
-                            horas_totales += diff.total_seconds() / 3600
-
-                    dias_procesados.add(fecha)
-
-                # 6) Calcular días completos
-                dias_completos = horas_totales / HORAS_POR_DIA
-
+                dias_calendario = set()  # Para contar días únicos con asistencia
+                ultimo_registro = None
+                entradas_sin_salida = []
+                
+                # 3) Procesar los registros para hacer pares entrada-salida
+                for registro in registros:
+                    # Añadir a días con asistencia
+                    if isinstance(registro['fecha'], date):
+                        fecha_str = registro['fecha'].isoformat()
+                    else:
+                        fecha_str = str(registro['fecha'])
+                    
+                    dias_calendario.add(fecha_str)
+                    
+                    # Procesar según el tipo de registro
+                    if registro['tipo'] == 'Entrada':
+                        # Guardar esta entrada para emparejarla después
+                        entradas_sin_salida.append(registro)
+                    
+                    elif registro['tipo'] == 'Salida' and entradas_sin_salida:
+                        # Tomar la entrada más reciente que no tenga salida
+                        entrada = entradas_sin_salida.pop(0)
+                        
+                        # Convertir ambos registros a datetime.time para poder calcular la diferencia
+                        entrada_time = convert_to_time(entrada['hora'])
+                        salida_time = convert_to_time(registro['hora'])
+                        
+                        # Verificar que la entrada y salida sean del mismo día
+                        entrada_fecha = entrada['fecha'].isoformat() if isinstance(entrada['fecha'], date) else str(entrada['fecha'])
+                        salida_fecha = registro['fecha'].isoformat() if isinstance(registro['fecha'], date) else str(registro['fecha'])
+                        
+                        if entrada_fecha == salida_fecha:
+                            # Calcular la diferencia de tiempo en horas
+                            if salida_time > entrada_time:  # Mismo día
+                                dt_entrada = datetime.combine(date.min, entrada_time)
+                                dt_salida = datetime.combine(date.min, salida_time)
+                                diff = dt_salida - dt_entrada
+                                horas_totales += diff.total_seconds() / 3600
+                
+                # 4) Calcular estadísticas finales
+                dias_asistidos = horas_totales / 8.0  # 8 horas = 1 día completo
+                
                 resultado.append({
                     "nombre": usuario['nombre'],
                     "apellido": usuario['apellido'],
                     "email": usuario['email'],
-                    "dias_asistidos": round(dias_completos, 1),
+                    "dias_asistidos": round(dias_asistidos, 1),
                     "horas_totales": round(horas_totales, 1),
-                    "dias_calendario": len(dias_procesados)
+                    "dias_calendario": len(dias_calendario)
                 })
 
         conn.close()
@@ -595,7 +616,33 @@ def get_horas_acumuladas():
         print(f"Error al obtener horas acumuladas: {e}")
         return jsonify({"error": str(e)}), 500
 
-# --- ENDPOINT: Detalle de horas por usuario (para debugging) ---
+# Función auxiliar para convertir diversos formatos de hora a datetime.time
+def convert_to_time(hora_value):
+    if isinstance(hora_value, time):
+        return hora_value
+    elif isinstance(hora_value, timedelta):
+        secs = int(hora_value.total_seconds())
+        hh, rem = divmod(secs, 3600)
+        mm, ss = divmod(rem, 60)
+        return time(hh, mm, ss)
+    elif isinstance(hora_value, str):
+        try:
+            return datetime.strptime(hora_value, "%H:%M:%S").time()
+        except ValueError:
+            # Intenta con otros formatos si el estándar falla
+            try:
+                return datetime.strptime(hora_value, "%H:%M").time()
+            except ValueError:
+                # Si todo falla, devuelve tiempo por defecto
+                return time(0, 0, 0)
+    else:
+        # Último recurso, intenta convertir a string y luego parsear
+        try:
+            return datetime.strptime(str(hora_value), "%H:%M:%S").time()
+        except:
+            return time(0, 0, 0)
+        
+
 # --- ENDPOINT: Detalle de horas por usuario (para debugging) ---
 @app.route('/horas_detalle/<email>', methods=['GET'])
 def get_horas_detalle(email):
@@ -943,16 +990,307 @@ def configurar_tarea_cierre_diario():
     
     print("Tarea de cierre diario programada para ejecutarse a las 23:55")
 
-# Modificar la sección principal para incluir la configuración de la tarea programada
+    # Endpoint para reiniciar estados de cumplimiento semanalmente
+@app.route('/reiniciar_cumplimiento', methods=['POST'])
+def reiniciar_cumplimiento():
+    try:
+        conn = get_connection()
+        
+        # Fecha actual
+        now = get_current_datetime()
+        fecha_actual = now.strftime('%Y-%m-%d')
+        
+        # 1. Crear tabla de historial si no existe
+        with conn.cursor() as cursor:
+            # Crear tabla para historial si no existe
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS historial_cumplimiento (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    usuario_id INT,
+                    email VARCHAR(255),
+                    nombre VARCHAR(100),
+                    apellido VARCHAR(100),
+                    semana_inicio DATE,
+                    semana_fin DATE,
+                    estado VARCHAR(50),
+                    cumplidos INT,
+                    incompletos INT,
+                    ausentes INT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+        
+        # 2. Obtener cumplimiento actual para guardar en historial
+        with conn.cursor() as cursor:
+            # Fecha de inicio de semana (lunes) y fin (domingo)
+            dias_atras = now.weekday()  # 0 es lunes, 6 es domingo
+            inicio_semana = now - timedelta(days=dias_atras)
+            fin_semana = inicio_semana + timedelta(days=6)
+            
+            inicio_semana_str = inicio_semana.strftime('%Y-%m-%d')
+            fin_semana_str = fin_semana.strftime('%Y-%m-%d')
+            
+            # Obtener usuarios activos y sus horarios
+            cursor.execute("SELECT * FROM usuarios_permitidos WHERE activo = 1")
+            usuarios = cursor.fetchall()
+            
+            historial_insertado = 0
+            
+            for user in usuarios:
+                # Calcular cumplimiento actual para este usuario
+                cursor.execute(
+                    "SELECT * FROM horarios_asignados WHERE usuario_id = %s",
+                    (user['id'],)
+                )
+                horarios = cursor.fetchall()
+                
+                # Si no tiene horarios, continuamos con el siguiente
+                if not horarios:
+                    continue
+                
+                # Obtener los registros de esta semana
+                cursor.execute("""
+                    SELECT * FROM registros 
+                    WHERE email = %s AND fecha BETWEEN %s AND %s
+                    ORDER BY fecha, hora
+                """, (user['email'], inicio_semana_str, fecha_actual))
+                
+                registros_semana = cursor.fetchall()
+                
+                # Contar estados
+                cumplidos = 0
+                incompletos = 0
+                ausentes = 0
+                
+                # Procesamiento simplificado para conteo
+                for h in horarios:
+                    # Tomar día de la semana del horario
+                    dia_semana = h['dia'].lower()
+                    
+                    # Verificar si hay registros para este día y horario
+                    cumplio_bloque = False
+                    incompleto_bloque = False
+                    
+                    # Filtrar registros por día de la semana
+                    registros_dia = [r for r in registros_semana if r['dia'].lower() == dia_semana]
+                    
+                    # Obtener horas de entrada y salida para este bloque
+                    hora_entrada = h['hora_entrada']
+                    hora_salida = h['hora_salida']
+                    
+                    # Convertir a datetime.time para comparación
+                    if isinstance(hora_entrada, timedelta):
+                        secs = int(hora_entrada.total_seconds())
+                        hora_entrada_dt = time(secs//3600, (secs%3600)//60, secs%60)
+                    elif isinstance(hora_entrada, str):
+                        hora_entrada_dt = datetime.strptime(hora_entrada, "%H:%M:%S").time()
+                    else:
+                        hora_entrada_dt = hora_entrada
+                    
+                    if isinstance(hora_salida, timedelta):
+                        secs = int(hora_salida.total_seconds())
+                        hora_salida_dt = time(secs//3600, (secs%3600)//60, secs%60)
+                    elif isinstance(hora_salida, str):
+                        hora_salida_dt = datetime.strptime(hora_salida, "%H:%M:%S").time()
+                    else:
+                        hora_salida_dt = hora_salida
+                    
+                    # Verificar cumplimiento simplificado para historial
+                    entradas = [r for r in registros_dia if r['tipo'] == 'Entrada']
+                    salidas = [r for r in registros_dia if r['tipo'] == 'Salida']
+                    
+                    if entradas and salidas:
+                        for entrada in entradas:
+                            # Hora entrada
+                            if isinstance(entrada['hora'], str):
+                                t_entrada = datetime.strptime(entrada['hora'], "%H:%M:%S").time()
+                            elif isinstance(entrada['hora'], timedelta):
+                                secs = int(entrada['hora'].total_seconds())
+                                t_entrada = time(secs//3600, (secs%3600)//60, secs%60)
+                            else:
+                                t_entrada = entrada['hora']
+                            
+                            for salida in salidas:
+                                if salida['id'] > entrada['id']:
+                                    # Hora salida
+                                    if isinstance(salida['hora'], str):
+                                        t_salida = datetime.strptime(salida['hora'], "%H:%M:%S").time()
+                                    elif isinstance(salida['hora'], timedelta):
+                                        secs = int(salida['hora'].total_seconds())
+                                        t_salida = time(secs//3600, (secs%3600)//60, secs%60)
+                                    else:
+                                        t_salida = salida['hora']
+                                    
+                                    # Verificar cumplimiento
+                                    if t_entrada <= hora_entrada_dt and t_salida >= hora_salida_dt:
+                                        cumplio_bloque = True
+                                        break
+                                    elif ((t_entrada > hora_entrada_dt and t_entrada < hora_salida_dt and t_salida >= hora_salida_dt) or
+                                          (t_entrada <= hora_entrada_dt and t_salida < hora_salida_dt) or
+                                          (t_entrada < hora_salida_dt and t_salida > hora_entrada_dt)):
+                                        incompleto_bloque = True
+                            
+                            if cumplio_bloque:
+                                break
+                    
+                    # Incrementar contadores
+                    if cumplio_bloque:
+                        cumplidos += 1
+                    elif incompleto_bloque:
+                        incompletos += 1
+                    else:
+                        ausentes += 1
+                
+                # Determinar estado general para el historial
+                if len(horarios) == 0:
+                    estado = "No Aplica"
+                elif cumplidos == len(horarios):
+                    estado = "Cumple"
+                elif ausentes == len(horarios):
+                    estado = "Ausente"
+                elif incompletos > 0 or (cumplidos > 0 and ausentes > 0):
+                    estado = "Incompleto"
+                else:
+                    estado = "No Cumple"
+                
+                # Guardar en historial
+                cursor.execute("""
+                    INSERT INTO historial_cumplimiento
+                    (usuario_id, email, nombre, apellido, semana_inicio, semana_fin, 
+                     estado, cumplidos, incompletos, ausentes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    user['id'],
+                    user['email'],
+                    user['nombre'],
+                    user['apellido'],
+                    inicio_semana_str,
+                    fin_semana_str,
+                    estado,
+                    cumplidos,
+                    incompletos,
+                    ausentes
+                ))
+                
+                historial_insertado += 1
+            
+            conn.commit()
+        
+        # 3. Reiniciar el estado de los bloques (opcional - esto depende de la lógica actual)
+        # Este paso no es necesario si el cumplimiento se calcula en tiempo real
+        # Pero podemos añadir una bandera para indicar el inicio de una nueva semana
+        
+        with conn.cursor() as cursor:
+            # Establecer alguna marca para indicar nuevo inicio de semana
+            # Por ejemplo, una tabla de configuración del sistema
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sistema_config (
+                    clave VARCHAR(50) PRIMARY KEY,
+                    valor TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Actualizar la fecha de último reinicio
+            cursor.execute("""
+                INSERT INTO sistema_config (clave, valor) 
+                VALUES ('ultimo_reinicio_cumplimiento', %s)
+                ON DUPLICATE KEY UPDATE valor = %s
+            """, (fecha_actual, fecha_actual))
+            
+            conn.commit()
+        
+        conn.close()
+        
+        return jsonify({
+            "mensaje": "Reinicio de cumplimiento semanal completado",
+            "fecha_reinicio": fecha_actual,
+            "registros_historial": historial_insertado
+        })
+        
+    except Exception as e:
+        print(f"Error en reinicio de cumplimiento: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --- Endpoint para obtener historial de cumplimiento ---
+@app.route('/historial_cumplimiento/<email>', methods=['GET'])
+def get_historial_cumplimiento(email):
+    try:
+        conn = get_connection()
+        
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM historial_cumplimiento
+                WHERE email = %s
+                ORDER BY semana_inicio DESC
+            """, (email,))
+            
+            historial = cursor.fetchall()
+            
+            # Formatear fechas
+            for item in historial:
+                for key, value in item.items():
+                    if isinstance(value, (datetime, date)):
+                        item[key] = value.isoformat()
+        
+        conn.close()
+        return jsonify(historial)
+        
+    except Exception as e:
+        print(f"Error al obtener historial de cumplimiento: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --- Programar tarea semanal de reinicio ---
+def configurar_reinicio_semanal():
+    """
+    Configura una tarea programada para reiniciar los estados de cumplimiento
+    cada semana (por ejemplo, los domingos a la medianoche).
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+    import requests
+    
+    def ejecutar_reinicio_semanal():
+        try:
+            # Llamar al endpoint de reinicio
+            response = requests.post(
+                'https://localhost:5000/reiniciar_cumplimiento',
+                json={},
+                verify=False  # Para desarrollo local
+            )
+            
+            if response.status_code == 200:
+                print(f"Reinicio semanal de cumplimiento ejecutado: {response.json()}")
+            else:
+                print(f"Error en reinicio semanal: {response.text}")
+        
+        except Exception as e:
+            print(f"Error al ejecutar reinicio semanal: {str(e)}")
+    
+    # Crear el scheduler
+    scheduler = BackgroundScheduler()
+    
+    # Programar la tarea para ejecutarse los domingos a las 23:55
+    scheduler.add_job(ejecutar_reinicio_semanal, 'cron', day_of_week='sun', hour=23, minute=55)
+    
+    # Iniciar el scheduler
+    scheduler.start()
+    
+    print("Tarea de reinicio semanal programada para los domingos a las 23:55")
+
+# Modificar la sección principal para incluir ambas tareas programadas
 if __name__ == '__main__':
-    # Intentar configurar la tarea programada (requiere apscheduler)
+    # Intentar configurar las tareas programadas (requiere apscheduler)
     try:
         import apscheduler
         configurar_tarea_cierre_diario()
+        configurar_reinicio_semanal()  # Añadir el reinicio semanal
+        print("Tareas programadas configuradas correctamente")
     except ImportError:
-        print("ADVERTENCIA: No se pudo configurar la tarea programada.")
+        print("ADVERTENCIA: No se pudieron configurar las tareas programadas.")
         print("Instale 'apscheduler' con: pip install apscheduler")
-        print("O ejecute manualmente el endpoint /procesar_salidas_pendientes")
+        print("O ejecute manualmente los endpoints /procesar_salidas_pendientes y /reiniciar_cumplimiento")
     
     # Definir rutas a los certificados
     # Opción 1: Rutas absolutas
