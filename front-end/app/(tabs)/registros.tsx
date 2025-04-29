@@ -220,7 +220,8 @@ export default function RegistrosScreen() {
                   styles.registroTipo,
                   item.tipo === 'Entrada' ? styles.entradaText : styles.salidaText
                 ]}>
-                  {item.tipo || getRegistroTipo(item)}
+                  {/* Usar directamente el valor tipo sin procesamiento adicional */}
+                  {item.tipo || 'Desconocido'}
                 </Text>
               </View>
             ) : null

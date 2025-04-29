@@ -36,11 +36,13 @@ const Cumplimiento = () => {
       });
   };
 
-  // Mapeo de estados según los requerimientos y la API
+  // Mapeo actualizado de estados según los requerimientos
   const mapearEstado = (estado) => {
     switch (estado) {
       case 'Cumple': return 'Cumplida';
-      case 'En Curso': return 'Pendiente';
+      case 'Pendiente': return 'Pendiente';
+      case 'Incompleto': return 'Incompleto';
+      case 'Ausente': return 'No Cumplido';
       case 'No Cumple': return 'No Cumplido';
       case 'No Aplica': return 'No Aplica';
       default: return 'Incompleto';
@@ -72,23 +74,24 @@ const Cumplimiento = () => {
   // Mensajes para los estados de semana
   const mensajeEstado = {
     'Cumplida': '¡Todos los horarios cumplidos!',
-    'Pendiente': 'Algunos horarios cumplidos',
-    'Incompleto': 'Faltan horarios por cumplir',
+    'Pendiente': 'Bloques horarios por cumplir',
+    'Incompleto': 'Asistencia parcial a bloques horarios',
     'No Cumplido': 'Sin asistencia registrada',
     'No Aplica': 'Sin horarios asignados'
   };
 
   // Colores para los estados de bloque
   const colorBloque = {
-    'Cumpliendo': '#4CAF50',
+    'Cumplido': '#4CAF50',
     'Pendiente': '#FFC107',
-    'Atrasado': '#795548',
+    'Atrasado': '#FF9800',
+    'Incompleto': '#FF9800',
     'Ausente': '#F44336',
-    'Cumplido': '#2196F3'
+    'Cumpliendo': '#2196F3'
   };
 
   const getTotalCumplimiento = () => {
-    const total = cumplimiento.length;
+    const total = cumplimiento.length - contarPorEstado('No Aplica'); // Excluir los "No Aplica"
     const cumpliendo = contarPorEstado('Cumplida');
     return total > 0 ? Math.round((cumpliendo / total) * 100) : 0;
   };

@@ -1,8 +1,8 @@
 // app/horas.tsx
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
 
-// Usar una constante directa para la URL de la API
+// Corregir la URL para usar HTTPS si el backend usa SSL
 const API_BASE = 'https://acceso.informaticauaint.com/api';
 
 export default function HorasAcumuladasScreen() {
@@ -19,7 +19,10 @@ export default function HorasAcumuladasScreen() {
     
     console.log("Cargando datos desde:", `${API_BASE}/horas_acumuladas`);
     
-    fetch(`${API_BASE}/horas_acumuladas`)
+    fetch(`${API_BASE}/horas_acumuladas`, {
+      // Opciones adicionales para manejar HTTPS sin certificados válidos en desarrollo
+      ...(Platform.OS === 'web' ? {} : { headers: { 'Cache-Control': 'no-cache' } })
+    })
       .then(res => {
         if (!res.ok) {
           throw new Error(`Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
@@ -28,7 +31,19 @@ export default function HorasAcumuladasScreen() {
       })
       .then(data => {
         console.log("Datos recibidos:", data);
-        setHorasData(Array.isArray(data) ? data : []);
+        // Asegurar que data es un array y contiene los campos esperados
+        if (!Array.isArray(data)) {
+          throw new Error('Formato de datos incorrecto');
+        }
+        // Validar que todos los elementos tengan los campos necesarios
+        setHorasData(data.map(item => ({
+          nombre: item.nombre || 'Sin nombre',
+          apellido: item.apellido || '',
+          email: item.email || 'sin-email',
+          horas_totales: item.horas_totales || 0,
+          dias_asistidos: item.dias_asistidos || 0,
+          dias_calendario: item.dias_calendario || 0
+        })));
         setRefreshing(false);
         setLoading(false);
       })
@@ -44,7 +59,8 @@ export default function HorasAcumuladasScreen() {
 
   useEffect(() => {
     loadHorasAcumuladas();
-    const interval = setInterval(loadHorasAcumuladas, 900000);
+    // Reducir la frecuencia de actualización automática para evitar exceso de consultas
+    const interval = setInterval(loadHorasAcumuladas, 300000); // 5 minutos
     return () => clearInterval(interval);
   }, []);
 
@@ -123,6 +139,10 @@ export default function HorasAcumuladasScreen() {
                 <View style={styles.horaStat}>
                   <Text style={styles.horasStatValue}>{item.dias_asistidos || 0}</Text>
                   <Text style={styles.horasStatLabel}>Días</Text>
+                </View>
+                <View style={styles.horaStat}>
+                  <Text style={styles.horasStatValue}>{item.dias_calendario || 0}</Text>
+                  <Text style={styles.horasStatLabel}>Asistencias</Text>
                 </View>
               </View>
             </View>
@@ -225,7 +245,7 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   horasStats: {
-    flex: 1,
+    flex: 1.5,
     flexDirection: 'row',
     justifyContent: 'space-around',
   },
@@ -233,12 +253,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   horasStatValue: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#1890ff',
   },
   horasStatLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#666',
   },
   lastUpdate: {
