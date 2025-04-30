@@ -1623,7 +1623,7 @@ if __name__ == '__main__':
     # Definir rutas a los certificados
     # Opción 1: Rutas absolutas
     cert_path = 'certificate.pem'  # Actualiza esta ruta
-    key_path = 'privatekey.pem'    # Actualiza esta ruta
+    key_path = 'privatekey.pem'  # Actualiza esta ruta
     
     # Opción 2: Rutas relativas al directorio del script
     # cert_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certificate.pem')
