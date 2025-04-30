@@ -755,26 +755,42 @@ def convert_to_time(hora_value):
         except:
             return time(0, 0, 0)
     
-# --- ENDPOINT: Ayudantes presentes (modificado) ---
 @app.route('/ayudantes_presentes', methods=['GET'])
 def get_ayudantes_presentes():
     try:
         conn = get_connection()
         
         with conn.cursor() as cursor:
-            # Obtener directamente de la tabla de estados
+            # Obtenemos la fecha actual
+            now = get_current_datetime()
+            today = now.strftime('%Y-%m-%d')
+            
+            # NUEVA IMPLEMENTACIÓN: Buscar los ayudantes cuyo último registro del día sea de tipo 'Entrada'
+            # Esta consulta encuentra el registro más reciente para cada usuario en el día actual
+            # y verifica si ese registro es de tipo 'Entrada'
             cursor.execute("""
-                SELECT e.email, e.nombre, e.apellido, e.estado, 
-                       e.ultima_entrada, u.foto_url
-                FROM estado_usuarios e
-                LEFT JOIN usuarios_permitidos u ON e.email = u.email
-                WHERE e.estado = 'dentro'
-            """)
+                SELECT r.email, r.nombre, r.apellido, r.hora as ultima_entrada, u.foto_url
+                FROM registros r
+                JOIN (
+                    -- Subconsulta para obtener el ID del último registro de cada usuario en el día actual
+                    SELECT email, MAX(id) as last_id
+                    FROM registros
+                    WHERE fecha = %s
+                    GROUP BY email
+                ) as ultimos
+                ON r.id = ultimos.last_id
+                LEFT JOIN usuarios_permitidos u ON r.email = u.email
+                WHERE r.tipo = 'Entrada' AND r.fecha = %s
+                ORDER BY r.hora DESC
+            """, (today, today))
             
             ayudantes_dentro = cursor.fetchall()
             
             # Formateo de datos
             for ayudante in ayudantes_dentro:
+                # Añadir estado explícitamente como 'dentro' para mantener compatibilidad con el frontend
+                ayudante['estado'] = 'dentro'
+                
                 # Convertir tipos de datos
                 for key, value in list(ayudante.items()):
                     if isinstance(value, (datetime, date)):
