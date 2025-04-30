@@ -1063,26 +1063,15 @@ def get_horas_detalle(email):
         return jsonify({"error": str(e)}), 500
     
 # --- PROCESO: Cierre automático modificado ---
+# --- ENDPOINT: Procesar salidas pendientes mejorado ---
 @app.route('/procesar_salidas_pendientes', methods=['POST'])
 def procesar_salidas_pendientes():
     try:
-        # Fecha a procesar (por defecto, ahora)
-        data = request.get_json() or {}
-        
         conn = get_connection()
         registros_procesados = []
         
         with conn.cursor() as cursor:
-            # Buscar usuarios con estado 'dentro' que no hayan registrado salida
-            cursor.execute("""
-                SELECT e.email, e.nombre, e.apellido, u.id as usuario_id
-                FROM estado_usuarios e
-                JOIN usuarios_permitidos u ON e.email = u.email
-                WHERE e.estado = 'dentro'
-            """)
-            
-            usuarios_dentro = cursor.fetchall()
-            
+            # Obtener fecha y hora actual
             now = get_current_datetime()
             fecha = now.strftime("%Y-%m-%d")
             hora = now.strftime("%H:%M:%S")
@@ -1090,14 +1079,67 @@ def procesar_salidas_pendientes():
             # Día de la semana en español
             dias = {
                 'Monday': 'lunes', 'Tuesday': 'martes', 'Wednesday': 'miércoles',
-                'Thursday': 'jueves', 'Friday': 'viernes', 'Saturday': 'sábado', 'Sunday': 'domingo'
+                'Thursday': 'jueves', 'Friday': 'viernes', 
+                'Saturday': 'sábado', 'Sunday': 'domingo'
             }
             dia = dias.get(now.strftime("%A"), now.strftime("%A"))
             
+            # 1. Buscar usuarios que tienen registros de entrada sin salida correspondiente HOY
+            cursor.execute("""
+                SELECT u.email, u.nombre, u.apellido, MAX(r.id) as ultimo_id, MAX(r.hora) as ultima_hora
+                FROM usuarios_permitidos u
+                JOIN registros r ON u.email = r.email
+                WHERE r.fecha = %s AND r.tipo = 'Entrada'
+                AND NOT EXISTS (
+                    SELECT 1 FROM registros r2 
+                    WHERE r2.email = r.email 
+                    AND r2.fecha = r.fecha 
+                    AND r2.tipo = 'Salida'
+                    AND r2.id > r.id
+                )
+                GROUP BY u.email, u.nombre, u.apellido
+            """, (fecha,))
+            
+            usuarios_sin_salida = cursor.fetchall()
+            
+            # 2. También buscar usuarios con estado 'dentro' en la tabla estado_usuarios como respaldo
+            cursor.execute("""
+                SELECT e.email, e.nombre, e.apellido
+                FROM estado_usuarios e
+                JOIN usuarios_permitidos u ON e.email = u.email
+                WHERE e.estado = 'dentro'
+                AND NOT EXISTS (
+                    SELECT 1 FROM registros r 
+                    WHERE r.email = e.email 
+                    AND r.fecha = %s
+                    AND r.tipo = 'Salida'
+                )
+            """, (fecha,))
+            
+            usuarios_dentro = cursor.fetchall()
+            
+            # Combinar ambos conjuntos de usuarios
+            emails_procesados = set()
+            todos_usuarios = []
+            
+            # Primero añadir usuarios con registros de entrada sin salida
+            for usuario in usuarios_sin_salida:
+                if usuario['email'] not in emails_procesados:
+                    todos_usuarios.append(usuario)
+                    emails_procesados.add(usuario['email'])
+            
+            # Luego añadir usuarios con estado 'dentro' sin registro de salida
             for usuario in usuarios_dentro:
+                if usuario['email'] not in emails_procesados:
+                    todos_usuarios.append(usuario)
+                    emails_procesados.add(usuario['email'])
+            
+            # Procesar cada usuario
+            for usuario in todos_usuarios:
                 # Insertar registro de salida automático
                 cursor.execute("""
-                    INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, tipo, auto_generado)
+                    INSERT INTO registros 
+                    (fecha, hora, dia, nombre, apellido, email, tipo, auto_generado)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     fecha,
@@ -1212,23 +1254,25 @@ def update_estado_usuario(email):
         return jsonify({"error": str(e)}), 500
 
 # --- TAREA PROGRAMADA: Configurar para ejecutar automáticamente ---
+# --- PROCESO: Configurar cierre automático ---
 def configurar_tarea_cierre_diario():
     """
-    Configura una tarea programada que se ejecutará diariamente para cerrar
-    los registros sin salida del día anterior.
-    
-    Esta función debe ser llamada al iniciar la aplicación.
+    Configura una tarea programada que se ejecutará diariamente a las 11:59 PM
+    para cerrar los registros sin salida del día.
     """
     from apscheduler.schedulers.background import BackgroundScheduler
     import requests
     
     def ejecutar_cierre_diario():
         try:
+            # URL correcta del servidor de producción
+            server_url = 'https://acceso.informaticauaint.com'
+            
             # Llamar al endpoint de procesar salidas pendientes
             response = requests.post(
-                'https://localhost:5000/procesar_salidas_pendientes',
+                f'{server_url}/api/procesar_salidas_pendientes',
                 json={},
-                verify=False  # Para desarrollo local. En producción, usar certificados apropiados
+                verify=True  # En producción, verificar los certificados
             )
             
             if response.status_code == 200:
@@ -1242,13 +1286,14 @@ def configurar_tarea_cierre_diario():
     # Crear el scheduler
     scheduler = BackgroundScheduler()
     
-    # Programar la tarea para ejecutarse todos los días a las 23:55
-    scheduler.add_job(ejecutar_cierre_diario, 'cron', hour=23, minute=55)
+    # Programar la tarea para ejecutarse TODOS los días a las 23:59 (11:59 PM)
+    scheduler.add_job(ejecutar_cierre_diario, 'cron', hour=23, minute=59)
     
     # Iniciar el scheduler
     scheduler.start()
     
-    print("Tarea de cierre diario programada para ejecutarse a las 23:55")
+    print("Tarea de cierre diario programada para ejecutarse a las 23:59 (11:59 PM)")
+
 
     # Endpoint para reiniciar estados de cumplimiento semanalmente
 @app.route('/reiniciar_cumplimiento', methods=['POST'])
@@ -1541,12 +1586,18 @@ def configurar_reinicio_semanal():
 
 # Modificar la sección principal para incluir ambas tareas programadas
 if __name__ == '__main__':
+    # Definir la URL del servidor para el cierre automático
+    SERVER_URL = 'https://acceso.informaticauaint.com'
+    
     # Intentar configurar las tareas programadas (requiere apscheduler)
     try:
         import apscheduler
         configurar_tarea_cierre_diario()
-        configurar_reinicio_semanal()  # Añadir el reinicio semanal
-        print("Tareas programadas configuradas correctamente")
+        configurar_reinicio_semanal()  # Mantener el reinicio semanal
+        print("Tareas programadas configuradas correctamente:")
+        print(f"- Cierre automático: diariamente a las 23:59 (11:59 PM)")
+        print(f"- Reinicio semanal: domingos a las 23:55")
+        print(f"- URL para el cierre automático: {SERVER_URL}/api/procesar_salidas_pendientes")
     except ImportError:
         print("ADVERTENCIA: No se pudieron configurar las tareas programadas.")
         print("Instale 'apscheduler' con: pip install apscheduler")
@@ -1584,5 +1635,5 @@ if __name__ == '__main__':
         print(f"Error al configurar el contexto SSL: {str(e)}")
         exit(1)
     
-    print("Iniciando servidor HTTPS en 10.0.3.54:5000")
+    print(f"Iniciando servidor HTTPS en 10.0.3.54:5000")
     app.run(debug=True, host='0.0.0.0', port=5000, ssl_context=context)
