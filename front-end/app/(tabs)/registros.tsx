@@ -12,6 +12,8 @@ export default function RegistrosScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filtroPersona, setFiltroPersona] = useState(null);
+  // Add a state for last update time to ensure consistency between server and client
+  const [lastUpdateTime, setLastUpdateTime] = useState('');
 
   const loadRegistros = () => {
     setRefreshing(true);
@@ -45,6 +47,8 @@ export default function RegistrosScreen() {
         setRegistros(sanitizedRegistros);
         setRefreshing(false);
         setLoading(false);
+        // Update last update time after data is loaded
+        setLastUpdateTime(new Date().toLocaleTimeString());
       })
       .catch(err => {
         console.error('Error al cargar registros:', err);
@@ -56,7 +60,12 @@ export default function RegistrosScreen() {
       });
   };
 
+  // Only run on the client side
   useEffect(() => {
+    // Set initial last update time to prevent hydration mismatch
+    setLastUpdateTime(new Date().toLocaleTimeString());
+    
+    // Use useEffect to ensure this only runs on the client
     loadRegistros();
     
     // Configurar intervalo para recargar datos
@@ -100,58 +109,6 @@ export default function RegistrosScreen() {
   const filteredRegistros = filtroPersona 
     ? registros.filter(item => item && item.email === filtroPersona)
     : registros;
-
-  // La función getRegistroTipo ahora obtiene directamente el tipo del registro
-  // o utiliza la lógica anterior como fallback si no está disponible
-  const getRegistroTipo = (registro) => {
-    // Si el registro ya tiene un tipo definido (de la base de datos), usarlo
-    if (registro.tipo && (registro.tipo === 'Entrada' || registro.tipo === 'Salida')) {
-      return registro.tipo;
-    }
-    
-    // Lógica de fallback si no hay un tipo definido
-    // Validar entradas
-    if (!registro || !registro.email || !Array.isArray(registros) || registros.length === 0) {
-      return 'Desconocido';
-    }
-    
-    try {
-      // Filtrar registros válidos de la misma persona
-      const registrosPersona = registros
-        .filter(r => r && r.email === registro.email && r.hora)
-        .sort((a, b) => {
-          try {
-            return new Date(`2000-01-01T${a.hora}`) - new Date(`2000-01-01T${b.hora}`);
-          } catch (e) {
-            console.warn('Error sorting times:', e);
-            return 0;
-          }
-        });
-
-      if (registrosPersona.length === 0) return 'Entrada';
-
-      // Encontrar el índice del registro actual
-      const idx = registrosPersona.findIndex(r => {
-        // Si tenemos IDs, compararlos primero
-        if (r.id && registro.id) {
-          return r.id === registro.id;
-        }
-        // Si no tenemos IDs, comparar por hora y nombre
-        return r.hora === registro.hora && 
-               r.nombre === registro.nombre && 
-               r.apellido === registro.apellido;
-      });
-      
-      // Si no se encuentra el registro, devolver valor por defecto
-      if (idx === -1) return 'Desconocido';
-      
-      // Determinar si es entrada o salida
-      return idx % 2 === 0 ? 'Entrada' : 'Salida';
-    } catch (error) {
-      console.error('Error en getRegistroTipo:', error);
-      return 'Desconocido';
-    }
-  };
 
   // Mostrar indicador de carga mientras se cargan los datos
   if (loading && !refreshing) {
@@ -220,7 +177,6 @@ export default function RegistrosScreen() {
                   styles.registroTipo,
                   item.tipo === 'Entrada' ? styles.entradaText : styles.salidaText
                 ]}>
-                  {/* Usar directamente el valor tipo sin procesamiento adicional */}
                   {item.tipo || 'Desconocido'}
                 </Text>
               </View>
@@ -230,8 +186,9 @@ export default function RegistrosScreen() {
         />
       )}
 
+      {/* Use the state variable for last update time to ensure hydration consistency */}
       <Text style={styles.lastUpdate}>
-        Última actualización: {new Date().toLocaleTimeString()}
+        Última actualización: {lastUpdateTime}
       </Text>
     </View>
   );

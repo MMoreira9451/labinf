@@ -37,7 +37,7 @@ export default function AyudantesScreen() {
           email: ayudante.email || 'sin-email@example.com',
           ultima_entrada: ayudante.ultima_entrada || '--:--',
           foto_url: ayudante.foto_url || null,
-          estado: ayudante.estado || 'dentro'
+          estado: 'dentro' // Todos los ayudantes en esta lista están dentro por definición del endpoint
         })) : [];
         
         setAyudantes(sanitizedData);
@@ -149,9 +149,7 @@ export default function AyudantesScreen() {
                   Entrada: {formatEntryTime(item.ultima_entrada)}
                 </Text>
                 <View style={styles.estadoBadge}>
-                  <Text style={styles.estadoText}>
-                    {item.estado === 'dentro' ? 'Presente' : 'Ausente'}
-                  </Text>
+                  <Text style={styles.estadoText}>Presente</Text>
                 </View>
               </View>
             </View>
