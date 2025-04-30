@@ -755,6 +755,7 @@ def convert_to_time(hora_value):
         except:
             return time(0, 0, 0)
     
+# Endpoint modificado: Ayudantes presentes
 @app.route('/ayudantes_presentes', methods=['GET'])
 def get_ayudantes_presentes():
     try:
@@ -765,9 +766,8 @@ def get_ayudantes_presentes():
             now = get_current_datetime()
             today = now.strftime('%Y-%m-%d')
             
-            # NUEVA IMPLEMENTACIÓN: Buscar los ayudantes cuyo último registro del día sea de tipo 'Entrada'
-            # Esta consulta encuentra el registro más reciente para cada usuario en el día actual
-            # y verifica si ese registro es de tipo 'Entrada'
+            # NUEVA IMPLEMENTACIÓN: Buscar ayudantes basados solo en la tabla registros
+            # Lógica: Un ayudante está presente si su último registro del día es de tipo 'Entrada'
             cursor.execute("""
                 SELECT r.email, r.nombre, r.apellido, r.hora as ultima_entrada, u.foto_url
                 FROM registros r
@@ -780,7 +780,8 @@ def get_ayudantes_presentes():
                 ) as ultimos
                 ON r.id = ultimos.last_id
                 LEFT JOIN usuarios_permitidos u ON r.email = u.email
-                WHERE r.tipo = 'Entrada' AND r.fecha = %s
+                WHERE r.fecha = %s
+                AND r.tipo = 'Entrada'  -- Solo considerar como presentes a quienes su último registro sea Entrada
                 ORDER BY r.hora DESC
             """, (today, today))
             
