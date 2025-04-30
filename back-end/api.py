@@ -48,7 +48,6 @@ app.json_provider_class = CustomJSONProvider
 app.json = CustomJSONProvider(app)
 
 # --- CONFIGURACIÓN DE CONEXIÓN ---
-JWT_SECRET = os.getenv('JWT_SECRET')
 DB_CONFIG = {
     'host':     os.getenv('DB_HOST'),
     'user':     os.getenv('DB_USER'),
