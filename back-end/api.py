@@ -10,6 +10,13 @@ from datetime import datetime, timedelta, date, time
 import jwt
 import hashlib
 from functools import wraps
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Carga .env desde el mismo dir de api.py
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
+
 
 app = Flask(__name__)
 CORS(app)
