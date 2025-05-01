@@ -7,7 +7,7 @@ on:
 jobs:
   build-web:
     runs-on: ubuntu-latest
-    environment: production
+    environment: prod
     defaults:
       run:
         working-directory: front-end
