@@ -1,13 +1,10 @@
 name: Build and Deploy Docker Stack
-
 on:
   push:
     branches: [main]
-
 jobs:
   build-web:
     runs-on: ubuntu-latest
-    environment: prod
     defaults:
       run:
         working-directory: front-end
@@ -39,6 +36,7 @@ jobs:
   deploy-docker:
     needs: build-web
     runs-on: ubuntu-latest
+    environment: prod
     steps:
     - name: Checkout repo
       uses: actions/checkout@v3
@@ -95,9 +93,8 @@ jobs:
             restart: always
         EOL
       
-    # Opcional: Desplegar en un servidor
-    - name: Deploy to remote server
-      if: ${{ secrets.DEPLOY_TO_SERVER == 'true' }}
+    # Desplegar en el servidor de producción
+    - name: Deploy to production server
       uses: appleboy/ssh-action@master
       with:
         host: ${{ secrets.SERVER_HOST }}
