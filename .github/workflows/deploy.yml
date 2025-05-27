@@ -69,7 +69,7 @@ jobs:
     - name: Build and push API image
       uses: docker/build-push-action@v4
       with:
-        context: ./back-end
+        context: ./back-end/web
         file: ./api.Dockerfile
         push: true
         tags: ${{ secrets.DOCKERHUB_USERNAME }}/api:latest
