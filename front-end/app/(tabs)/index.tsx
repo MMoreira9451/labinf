@@ -49,7 +49,8 @@ export default function QRGenerator() {
       surname, 
       email, 
       timestamp, 
-      expired: false 
+      expired: false,
+      tipoUsuario: 'AYUDANTE' // Identificador de ayudante
     };
 
     try {
@@ -155,7 +156,7 @@ export default function QRGenerator() {
     
     // When selecting an existing user, generate a new QR with current timestamp
     const timestamp = Date.now();
-    const updatedUser = { ...user, timestamp, expired: false };
+    const updatedUser = { ...user, timestamp, expired: false, tipoUsuario: 'AYUDANTE' };
     setSelectedUser(updatedUser);
     setQrExpired(false);
     
@@ -190,7 +191,8 @@ export default function QRGenerator() {
       name: selectedUser.name.trim(),
       surname: selectedUser.surname.trim(),
       email: selectedUser.email.trim(),
-      timestamp: selectedUser.timestamp
+      timestamp: selectedUser.timestamp,
+      tipoUsuario: 'AYUDANTE' // Identificador de ayudante
     };
   
     // Add additional properties based on state
@@ -219,7 +221,7 @@ export default function QRGenerator() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>QR Generator</Text>
+      <Text style={styles.title}>QR Generator - Ayudantes</Text>
       <TextInput style={styles.input} placeholder="Name" value={name} onChangeText={setName} />
       <TextInput style={styles.input} placeholder="Surname" value={surname} onChangeText={setSurname} />
       <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
@@ -253,7 +255,7 @@ export default function QRGenerator() {
           ]}>
             {(qrExpired && !autoRenewal) 
               ? 'Expired QR' 
-              : `${selectedUser.name} ${selectedUser.surname} - ${selectedUser.email}`
+              : `${selectedUser.name} ${selectedUser.surname} - ${selectedUser.email} (AYUDANTE)`
             }
           </Text>
           <QRCode
