@@ -2,14 +2,10 @@ name: Build and Push Docker Images
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]  # Solo main para prod
     paths:
       - 'back-end/**'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'back-end/**'
-  workflow_dispatch:
+  workflow_dispatch:  # Permitir activación manual
 
 env:
   REGISTRY: docker.io
@@ -18,6 +14,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: prod  # Environment de producción
+    # Solo ejecutar en main branch para producción
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -32,24 +31,28 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Verify production deployment
+      run: |
+        echo "🚀 Desplegando a producción desde branch: ${{ github.ref }}"
+        echo "🏗️ Environment: ${{ github.environment }}"
+        echo "🔧 Building image: ${{ matrix.image }}"
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
     - name: Verify Docker Hub credentials
-      if: github.event_name != 'pull_request'
       run: |
         if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
-          echo "❌ DOCKERHUB_USERNAME secret no está configurado"
+          echo "❌ DOCKERHUB_USERNAME no configurado en environment prod"
           exit 1
         fi
         if [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-          echo "❌ DOCKERHUB_TOKEN secret no está configurado"
+          echo "❌ DOCKERHUB_TOKEN no configurado en environment prod"
           exit 1
         fi
-        echo "✅ Secrets de Docker Hub están configurados"
+        echo "✅ Credentials verificados para environment prod"
 
     - name: Log in to Docker Hub
-      if: github.event_name != 'pull_request'
       uses: docker/login-action@v3
       with:
         registry: ${{ env.REGISTRY }}
@@ -62,27 +65,32 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
         tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=latest
+          type=sha,prefix=prod-
+          type=raw,value={{date 'YYYYMMDD-HHmmss' tz='America/Santiago'}}
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: ${{ matrix.context }}
         file: ${{ matrix.context }}/${{ matrix.dockerfile }}
-        push: ${{ github.event_name != 'pull_request' }}
+        push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         platforms: linux/amd64,linux/arm64
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
+    - name: Production deployment summary
+      run: |
+        echo "🎉 Imagen desplegada exitosamente:"
+        echo "📦 ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest"
+        echo "🔗 ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:prod-${{ github.sha }}"
+
   security-scan:
     runs-on: ubuntu-latest
+    environment: prod
     needs: build-and-push
-    if: github.event_name != 'pull_request'
     strategy:
       matrix:
         image: [web, lector]
@@ -95,7 +103,7 @@ jobs:
         format: 'sarif'
         output: 'trivy-results-${{ matrix.image }}.sarif'
 
-    - name: Upload Trivy scan results to GitHub Security tab
+    - name: Upload Trivy scan results
       uses: github/codeql-action/upload-sarif@v2
       if: always()
       with:
