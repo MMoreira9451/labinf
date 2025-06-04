@@ -11,26 +11,34 @@ estudiantes_bp = Blueprint('estudiantes', __name__)
 def get_estudiantes():
     """Obtiene la lista de todos los estudiantes"""
     try:
+        # Consulta simplificada y corregida
         query = """
         SELECT 
             ue.id,
             ue.nombre,
             ue.apellido,
             ue.email,
-            ue.activo as estado,
+            ue.activo,
             ue.TP as carrera,
             CASE 
-                WHEN er.email IS NOT NULL AND DATE(er.fecha) = CURDATE() 
+                WHEN EXISTS (
+                    SELECT 1 FROM EST_registros er 
+                    WHERE er.email = ue.email 
+                    AND DATE(er.fecha) = CURDATE() 
+                    AND er.tipo = 'Entrada'
+                    AND NOT EXISTS (
+                        SELECT 1 FROM EST_registros er2 
+                        WHERE er2.email = ue.email 
+                        AND DATE(er2.fecha) = CURDATE() 
+                        AND er2.tipo = 'Salida' 
+                        AND er2.hora > er.hora
+                    )
+                ) 
                 THEN 1 
                 ELSE 0 
             END as presente
         FROM usuarios_estudiantes ue
-        LEFT JOIN (
-            SELECT email, fecha, 
-                   ROW_NUMBER() OVER (PARTITION BY email ORDER BY fecha DESC, hora DESC) as rn
-            FROM EST_registros 
-            WHERE tipo = 'Entrada'
-        ) er ON ue.email = er.email AND er.rn = 1
+        WHERE ue.activo = 1
         ORDER BY ue.apellido, ue.nombre
         """
         
@@ -41,12 +49,12 @@ def get_estudiantes():
         for est in estudiantes:
             formatted_estudiantes.append({
                 'id': str(est['id']),
-                'nombre': est['nombre'],
-                'apellido': est['apellido'],
+                'nombre': est['nombre'] or '',
+                'apellido': est['apellido'] or '',
                 'rut': '',  # No hay RUT en la DB actual
                 'carrera': est['carrera'] or '',
-                'email': est['email'],
-                'estado': 'activo' if est['estado'] else 'inactivo',
+                'email': est['email'] or '',
+                'estado': 'activo' if est['activo'] else 'inactivo',
                 'presente': bool(est['presente'])
             })
         
@@ -145,28 +153,36 @@ def create_estudiante():
 def get_estudiante(estudiante_id):
     """Obtiene los detalles de un estudiante específico"""
     try:
+        # Consulta principal del estudiante
         query = """
-        SELECT 
-            ue.*,
-            CASE 
-                WHEN er.email IS NOT NULL AND DATE(er.fecha) = CURDATE() 
-                THEN 1 
-                ELSE 0 
-            END as presente
-        FROM usuarios_estudiantes ue
-        LEFT JOIN (
-            SELECT email, fecha,
-                   ROW_NUMBER() OVER (PARTITION BY email ORDER BY fecha DESC, hora DESC) as rn
-            FROM EST_registros 
-            WHERE tipo = 'Entrada'
-        ) er ON ue.email = er.email AND er.rn = 1
-        WHERE ue.id = %s
+        SELECT id, nombre, apellido, email, activo, TP as carrera
+        FROM usuarios_estudiantes 
+        WHERE id = %s
         """
         
         estudiante = execute_query(query, (estudiante_id,), fetch_one=True)
         
         if not estudiante:
             return jsonify({'error': 'Estudiante no encontrado'}), 404
+        
+        # Verificar si está presente hoy
+        query_presente = """
+        SELECT COUNT(*) as presente
+        FROM EST_registros 
+        WHERE email = %s 
+        AND DATE(fecha) = CURDATE() 
+        AND tipo = 'Entrada'
+        AND NOT EXISTS (
+            SELECT 1 FROM EST_registros er2 
+            WHERE er2.email = %s 
+            AND DATE(er2.fecha) = CURDATE() 
+            AND er2.tipo = 'Salida' 
+            AND er2.hora > EST_registros.hora
+        )
+        """
+        
+        presente_result = execute_query(query_presente, (estudiante['email'], estudiante['email']), fetch_one=True)
+        presente = presente_result['presente'] > 0 if presente_result else False
         
         # Obtener historial de registros reciente
         query_registros = """
@@ -181,12 +197,12 @@ def get_estudiante(estudiante_id):
         
         response_data = {
             'id': str(estudiante['id']),
-            'nombre': estudiante['nombre'],
-            'apellido': estudiante['apellido'],
-            'email': estudiante['email'],
-            'carrera': estudiante['TP'] or '',
+            'nombre': estudiante['nombre'] or '',
+            'apellido': estudiante['apellido'] or '',
+            'email': estudiante['email'] or '',
+            'carrera': estudiante['carrera'] or '',
             'activo': bool(estudiante['activo']),
-            'presente': bool(estudiante['presente']),
+            'presente': presente,
             'registros_recientes': [{
                 'fecha': reg['fecha'].strftime('%Y-%m-%d'),
                 'hora': str(reg['hora']),
