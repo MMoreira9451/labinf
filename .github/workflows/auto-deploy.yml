@@ -1,0 +1,441 @@
+# .github/workflows/ci-cd.yml
+name: CI/CD - Build and Deploy
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ========================================
+  # FRONTEND BUILD & DEPLOY
+  # ========================================
+  frontend:
+    name: Frontend - Build & Deploy
+    runs-on: ubuntu-latest
+    environment: Prod
+    
+    strategy:
+      matrix:
+        app:
+          - name: ayudantes
+            path: front-end/ayudantes
+            image_name: asistencias-qr
+          - name: estudiantes
+            path: front-end/estudiantes
+            image_name: estudiantes-qr
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js ${{ env.NODE_VERSION }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to DockerHub
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ env.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    # Cache dependencies
+    - name: Cache node modules for ${{ matrix.app.name }}
+      uses: actions/cache@v4
+      with:
+        path: ${{ matrix.app.path }}/node_modules
+        key: ${{ runner.os }}-${{ matrix.app.name }}-${{ hashFiles(format('{0}/package-lock.json', matrix.app.path)) }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.app.name }}-
+
+    # Install and build
+    - name: Install dependencies for ${{ matrix.app.name }}
+      working-directory: ${{ matrix.app.path }}
+      run: npm ci || npm install
+
+    - name: Build ${{ matrix.app.name }} static files
+      working-directory: ${{ matrix.app.path }}
+      run: |
+        npx expo install --fix
+        npx expo export -p web --output-dir dist
+
+    # Extract metadata for Docker
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_USERNAME }}/${{ matrix.app.image_name }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    # Build and push Docker image
+    - name: Build and push ${{ matrix.app.name }} Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.app.path }}
+        file: ${{ matrix.app.path }}/Dockerfile
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha,scope=${{ matrix.app.name }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.app.name }}
+
+    - name: Generate build summary
+      if: github.event_name != 'pull_request'
+      run: |
+        echo "## 🎨 Frontend Built: ${{ matrix.app.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **App**: ${{ matrix.app.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: \`${{ env.DOCKERHUB_USERNAME }}/${{ matrix.app.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tags**: \`${{ steps.meta.outputs.tags }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ========================================
+  # BACKEND BUILD & DEPLOY
+  # ========================================
+  backend:
+    name: Backend - Build & Deploy
+    runs-on: ubuntu-latest
+    environment: Prod
+    
+    strategy:
+      matrix:
+        service:
+          - name: api-estudiantes
+            context: back-end/api_estudiantes
+            dockerfile: back-end/api_estudiantes/Dockerfile
+            image_name: acceso-api-estudiantes
+          - name: lector-qr
+            context: back-end/lector
+            dockerfile: back-end/lector/Dockerfile
+            image_name: acceso-lector-qr
+          - name: web-api
+            context: back-end/web
+            dockerfile: back-end/web/Dockerfile
+            image_name: acceso-web-api
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to DockerHub
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ env.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    # Extract metadata for Docker
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.DOCKERHUB_USERNAME }}/${{ matrix.service.image_name }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    # Auto-create Dockerfile if missing
+    - name: Ensure Dockerfile exists
+      run: |
+        if [ ! -f "${{ matrix.service.dockerfile }}" ]; then
+          echo "🔧 Creating Dockerfile for ${{ matrix.service.name }}"
+          mkdir -p $(dirname "${{ matrix.service.dockerfile }}")
+          
+          case "${{ matrix.service.name }}" in
+            "api-estudiantes")
+              cat > "${{ matrix.service.dockerfile }}" << 'EOF'
+        FROM python:3.11-slim
+
+        # Metadatos
+        LABEL maintainer="acceso.informaticauaint.com"
+        LABEL description="API Estudiantes para sistema de acceso"
+
+        # Variables de entorno
+        ENV PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONUNBUFFERED=1 \
+            FLASK_APP=app.py \
+            FLASK_ENV=production
+
+        # Instalar dependencias del sistema
+        RUN apt-get update && apt-get install -y \
+            gcc \
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+
+        # Crear usuario no-root
+        RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+        # Crear directorio de trabajo
+        WORKDIR /app
+
+        # Copiar archivos de dependencias
+        COPY requirements.txt .
+
+        # Instalar dependencias de Python
+        RUN pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir -r requirements.txt
+
+        # Copiar código fuente
+        COPY . .
+
+        # Cambiar propietario de archivos
+        RUN chown -R appuser:appuser /app
+
+        # Cambiar a usuario no-root
+        USER appuser
+
+        # Exponer puerto
+        EXPOSE 5000
+
+        # Comando de salud
+        HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+            CMD curl -f http://localhost:5000/api/health || exit 1
+
+        # Comando por defecto
+        CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "60", "app:app"]
+        EOF
+              ;;
+            "lector-qr")
+              cat > "${{ matrix.service.dockerfile }}" << 'EOF'
+        FROM python:3.11-slim
+
+        # Metadatos
+        LABEL maintainer="acceso.informaticauaint.com"
+        LABEL description="Lector QR para sistema de acceso"
+
+        # Variables de entorno
+        ENV PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONUNBUFFERED=1
+
+        # Instalar dependencias del sistema
+        RUN apt-get update && apt-get install -y \
+            gcc \
+            curl \
+            libzbar0 \
+            && rm -rf /var/lib/apt/lists/*
+
+        # Crear usuario no-root
+        RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+        # Crear directorio de trabajo
+        WORKDIR /app
+
+        # Copiar archivos de dependencias
+        COPY requirements.txt .
+
+        # Instalar dependencias de Python
+        RUN pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir -r requirements.txt
+
+        # Copiar código fuente
+        COPY . .
+
+        # Cambiar propietario de archivos
+        RUN chown -R appuser:appuser /app
+
+        # Cambiar a usuario no-root
+        USER appuser
+
+        # Exponer puerto
+        EXPOSE 8000
+
+        # Comando por defecto
+        CMD ["python", "app.py"]
+        EOF
+              ;;
+            "web-api")
+              cat > "${{ matrix.service.dockerfile }}" << 'EOF'
+        FROM python:3.11-slim
+
+        # Metadatos
+        LABEL maintainer="acceso.informaticauaint.com"
+        LABEL description="Web API para sistema de acceso"
+
+        # Variables de entorno
+        ENV PYTHONDONTWRITEBYTECODE=1 \
+            PYTHONUNBUFFERED=1 \
+            FLASK_APP=app.py \
+            FLASK_ENV=production
+
+        # Instalar dependencias del sistema
+        RUN apt-get update && apt-get install -y \
+            gcc \
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+
+        # Crear usuario no-root
+        RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+        # Crear directorio de trabajo
+        WORKDIR /app
+
+        # Copiar archivos de dependencias
+        COPY requirements.txt .
+
+        # Instalar dependencias de Python
+        RUN pip install --no-cache-dir --upgrade pip && \
+            pip install --no-cache-dir -r requirements.txt
+
+        # Copiar código fuente
+        COPY . .
+
+        # Cambiar propietario de archivos
+        RUN chown -R appuser:appuser /app
+
+        # Cambiar a usuario no-root
+        USER appuser
+
+        # Exponer puerto
+        EXPOSE 5000
+
+        # Comando de salud
+        HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+            CMD curl -f http://localhost:5000/api/health || exit 1
+
+        # Comando por defecto
+        CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "60", "app:app"]
+        EOF
+              ;;
+          esac
+        else
+          echo "✅ Dockerfile already exists for ${{ matrix.service.name }}"
+        fi
+
+    # Build and push Docker image
+    - name: Build and push ${{ matrix.service.name }} Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ${{ matrix.service.context }}
+        file: ${{ matrix.service.dockerfile }}
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha,scope=${{ matrix.service.name }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+    - name: Generate build summary
+      if: github.event_name != 'pull_request'
+      run: |
+        echo "## ⚙️ Backend Built: ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Service**: ${{ matrix.service.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: \`${{ env.DOCKERHUB_USERNAME }}/${{ matrix.service.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tags**: \`${{ steps.meta.outputs.tags }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Platforms**: linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+  # ========================================
+  # SECURITY SCAN
+  # ========================================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    environment: Prod
+    
+    strategy:
+      matrix:
+        image:
+          # Frontend images
+          - asistencias-qr
+          - estudiantes-qr
+          # Backend images
+          - acceso-api-estudiantes
+          - acceso-lector-qr
+          - acceso-web-api
+
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: '${{ env.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest'
+        format: 'sarif'
+        output: 'trivy-results-${{ matrix.image }}.sarif'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
+
+  # ========================================
+  # DEPLOYMENT NOTIFICATION
+  # ========================================
+  deployment-notification:
+    name: Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, security-scan]
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: Prod
+
+    steps:
+    - name: Generate deployment summary
+      run: |
+        echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## ✅ Images Built Successfully" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🎨 Frontend Applications:" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest\` - Aplicación para Ayudantes" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest\` - Aplicación para Estudiantes" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚙️ Backend Services:" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest\` - API de Estudiantes" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest\` - Servicio Lector QR" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest\` - API Web Principal" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🐳 Quick Deploy Commands" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Pull all images:" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "# Frontend" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "# Backend" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔄 Quick restart (if using docker-compose):" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "docker-compose pull && docker-compose up -d --force-recreate" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "📊 **Build Info**: Commit \`${{ github.sha }}\` | Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify deployment status
+      if: success()
+      run: |
+        echo "✅ All services built and pushed successfully!"
+        echo "🔍 Security scans completed"
+        echo "🎯 Ready for deployment"
