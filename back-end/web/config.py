@@ -13,11 +13,11 @@ class Config:
     JWT_SECRET = os.getenv('JWT_SECRET')
     
     # Base de datos
-    DB_HOST = os.getenv('DB_HOST')
-    DB_USER = os.getenv('DB_USER')
-    DB_PASSWORD = os.getenv('DB_PASSWORD')
-    DB_NAME = os.getenv('DB_NAME')
-    DB_PORT = int(os.getenv('DB_PORT', 3306))
+    DB_HOST = os.getenv('MYSQL_HOST')
+    DB_USER = os.getenv('MYSQL_USER')
+    DB_PASSWORD = os.getenv('MYSQL_PASSWORD')
+    DB_NAME = os.getenv('MYSQL_DB')
+    DB_PORT = int(os.getenv('MYSQL_PORT', 3306))
     DB_CHARSET = os.getenv('DB_CHARSET', 'utf8mb4')
     
     # Servidor
