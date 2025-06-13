@@ -440,7 +440,7 @@ jobs:
         echo "🔍 Security scans completed"
         echo "🎯 Ready for deployment"
 
-  # ========================================
+# ========================================
   # NOTIFICAR SERVIDOR REMOTO
   # ========================================
   notify-server:
@@ -473,13 +473,14 @@ jobs:
     - name: Trigger server update
       run: |
         echo "🚀 Enviando webhook al servidor..."
+        echo "🎯 URL destino: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
         
         RESPONSE=$(curl -s -w "%{http_code}" \
           -X POST \
           -H "Content-Type: application/json" \
           -H "X-Hub-Signature-256: ${{ steps.signature.outputs.signature }}" \
           -d '${{ steps.payload.outputs.payload }}' \
-          ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update)
+          "${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update")
         
         HTTP_CODE="${RESPONSE: -3}"
         BODY="${RESPONSE%???}"
@@ -490,7 +491,8 @@ jobs:
         if [ "$HTTP_CODE" -eq 200 ]; then
           echo "✅ Webhook enviado exitosamente"
         else
-          echo "❌ Error enviando webhook"
+          echo "❌ Error enviando webhook (HTTP $HTTP_CODE)"
+          echo "🔍 Debug - URL: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
           exit 1
         fi
 
