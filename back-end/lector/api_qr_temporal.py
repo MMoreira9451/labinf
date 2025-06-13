@@ -3,23 +3,34 @@ from flask_cors import CORS
 import pymysql
 import json
 import time
+import os
 from datetime import datetime, timedelta
 import logging
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configurar logging
-logging.basicConfig(level=logging.INFO)
+log_level = getattr(logging, os.getenv('LOG_LEVEL', 'INFO').upper())
+logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=os.getenv('CORS_ORIGINS', '*'))
+
+# Configurar Flask
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default-secret-key')
+if os.getenv('FLASK_ENV'):
+    app.config['ENV'] = os.getenv('FLASK_ENV')
 
 # Configuración de la base de datos
 DB_CONFIG = {
-    'host': '10.0.3.54',
-    'user': 'mm',
-    'password': 'lwNduG0qcBu2RCJ7uRxk',
-    'database': 'registro_qr',
-    'port': 3306,
+    'host': os.getenv('MYSQL_HOST', 'localhost'),
+    'user': os.getenv('MYSQL_USER', 'root'),
+    'password': os.getenv('MYSQL_PASSWORD', ''),
+    'database': os.getenv('MYSQL_DB', 'registro_qr'),
+    'port': int(os.getenv('MYSQL_PORT', 3306)),
     'charset': 'utf8mb4',
     'cursorclass': pymysql.cursors.DictCursor
 }
@@ -464,6 +475,9 @@ def get_stats():
         return jsonify({"success": False, "error": "Error interno"}), 500
 
 if __name__ == '__main__':
+    host = os.getenv('HOST', '0.0.0.0')
+    port = int(os.getenv('PORT', 5000))
+    
     print("🚀 Iniciando API QR Temporal")
     print("📊 Endpoints disponibles:")
     print("  - POST /validate-qr - Validar y registrar QR")
@@ -472,6 +486,6 @@ if __name__ == '__main__':
     print("  - GET /get-last-records - Últimos registros")
     print("  - GET /stats - Estadísticas del día")
     print("  - GET /health - Estado de la API")
-    print("🔗 API ejecutándose en http://0.0.0.0:5000")
+    print(f"🔗 API ejecutándose en http://{host}:{port}")
     
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host=host, port=port, debug=(os.getenv('FLASK_ENV') == 'development'))
