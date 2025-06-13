@@ -467,13 +467,35 @@ jobs:
     - name: Generate signature
       id: signature
       run: |
-        SIGNATURE=$(echo -n '${{ steps.payload.outputs.payload }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' | cut -d' ' -f2)
+        # Debug: mostrar el payload antes de firmar
+        echo "🔍 Payload a firmar:"
+        echo '${{ steps.payload.outputs.payload }}'
+        echo ""
+        
+        # Generar firma usando el mismo método que funciona manualmente
+        SIGNATURE=$(echo -n '${{ steps.payload.outputs.payload }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' -binary | xxd -p -c 256)
+        echo "🔐 Firma generada: sha256=$SIGNATURE"
         echo "signature=sha256=$SIGNATURE" >> $GITHUB_OUTPUT
 
     - name: Trigger server update
       run: |
         echo "🚀 Enviando webhook al servidor..."
+        
+        # Verificar que el secret existe
+        if [ -z "${{ secrets.SERVER_WEBHOOK_URL }}" ]; then
+          echo "❌ ERROR: SERVER_WEBHOOK_URL secret no está configurado"
+          exit 1
+        fi
+        
+        if [ -z "${{ secrets.WEBHOOK_SECRET }}" ]; then
+          echo "❌ ERROR: WEBHOOK_SECRET secret no está configurado"
+          exit 1
+        fi
+        
         echo "🎯 URL destino: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
+        echo "🔐 Firma: ${{ steps.signature.outputs.signature }}"
+        echo "📦 Payload: ${{ steps.payload.outputs.payload }}"
+        echo ""
         
         RESPONSE=$(curl -s -w "%{http_code}" \
           -X POST \
@@ -492,7 +514,12 @@ jobs:
           echo "✅ Webhook enviado exitosamente"
         else
           echo "❌ Error enviando webhook (HTTP $HTTP_CODE)"
-          echo "🔍 Debug - URL: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
+          
+          # Debug adicional
+          echo "🔍 Debug info:"
+          echo "  - URL: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
+          echo "  - Payload length: ${#{{ steps.payload.outputs.payload }}}"
+          echo "  - Response body: $BODY"
           exit 1
         fi
 
