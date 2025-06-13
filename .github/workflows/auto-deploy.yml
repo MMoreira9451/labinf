@@ -453,17 +453,16 @@ jobs:
     - name: Generate webhook payload
       id: payload
       run: |
-        PAYLOAD=$(cat << EOF
+        # Crear payload en una sola línea para evitar problemas
+        TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        PAYLOAD='{"ref":"${{ github.ref }}","repository":"${{ github.repository }}","commit":"${{ github.sha }}","pusher":"${{ github.actor }}","timestamp":"'$TIMESTAMP'"}'
+        
+        # Usar multiline output para manejar caracteres especiales
         {
-          "ref": "${{ github.ref }}",
-          "repository": "${{ github.repository }}",
-          "commit": "${{ github.sha }}",
-          "pusher": "${{ github.actor }}",
-          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        }
-        EOF
-        )
-        echo "payload=$PAYLOAD" >> $GITHUB_OUTPUT
+          echo "payload<<EOF"
+          echo "$PAYLOAD"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
 
     - name: Generate signature
       id: signature
