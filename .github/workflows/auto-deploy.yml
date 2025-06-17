@@ -40,9 +40,9 @@ jobs:
           - name: estudiantes
             path: front-end/estudiantes
             image_name: estudiantes-qr
-          - name: front-lector
-            path: front-end/lector
-            image_name: front-lector
+          #- name: front-lector
+          #  path: front-end/lector
+          #  image_name: front-lector
 
     steps:
     - name: Checkout repository
