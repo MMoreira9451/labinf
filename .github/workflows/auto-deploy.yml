@@ -159,166 +159,120 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
 
-    # Auto-create Dockerfile if missing
+    # Auto-create optimized Dockerfile if missing
     - name: Ensure Dockerfile exists
       run: |
         if [ ! -f "${{ matrix.service.dockerfile }}" ]; then
-          echo "🔧 Creating Dockerfile for ${{ matrix.service.name }}"
+          echo "🔧 Creating optimized Dockerfile for ${{ matrix.service.name }}"
           mkdir -p $(dirname "${{ matrix.service.dockerfile }}")
           
           case "${{ matrix.service.name }}" in
-            "api-estudiantes")
+            "api-estudiantes"|"web-api")
               cat > "${{ matrix.service.dockerfile }}" << 'EOF'
         FROM python:3.11-slim
-
+        
         # Metadatos
         LABEL maintainer="acceso.informaticauaint.com"
-        LABEL description="API Estudiantes para sistema de acceso"
-
+        LABEL description="${{ matrix.service.name }} para sistema de acceso"
+        
         # Variables de entorno
         ENV PYTHONDONTWRITEBYTECODE=1 \
             PYTHONUNBUFFERED=1 \
             FLASK_APP=app.py \
-            FLASK_ENV=production
-
-        # Instalar dependencias del sistema
-        RUN apt-get update && apt-get install -y \
+            FLASK_ENV=production \
+            PIP_NO_CACHE_DIR=1 \
+            PIP_DISABLE_PIP_VERSION_CHECK=1
+        
+        # Instalar dependencias del sistema en una sola capa
+        RUN apt-get update && apt-get install -y --no-install-recommends \
             gcc \
             curl \
-            && rm -rf /var/lib/apt/lists/*
-
+            && rm -rf /var/lib/apt/lists/* \
+            && apt-get clean
+        
         # Crear usuario no-root
         RUN groupadd -r appuser && useradd -r -g appuser appuser
-
+        
         # Crear directorio de trabajo
         WORKDIR /app
-
-        # Copiar archivos de dependencias
+        
+        # Copiar y instalar dependencias (aprovechar cache de Docker)
         COPY requirements.txt .
-
-        # Instalar dependencias de Python
         RUN pip install --no-cache-dir --upgrade pip && \
             pip install --no-cache-dir -r requirements.txt
-
+        
         # Copiar código fuente
         COPY . .
-
+        
         # Cambiar propietario de archivos
         RUN chown -R appuser:appuser /app
-
+        
         # Cambiar a usuario no-root
         USER appuser
-
+        
         # Exponer puerto
         EXPOSE 5000
-
-        # Comando de salud
-        HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+        
+        # Health check optimizado
+        HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
             CMD curl -f http://localhost:5000/api/health || exit 1
-
-        # Comando por defecto
-        CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "60", "app:app"]
+        
+        # Comando por defecto optimizado
+        CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "2", "--timeout", "60", "--keep-alive", "2", "app:app"]
         EOF
               ;;
             "lector-qr")
               cat > "${{ matrix.service.dockerfile }}" << 'EOF'
         FROM python:3.11-slim
-
+        
         # Metadatos
         LABEL maintainer="acceso.informaticauaint.com"
         LABEL description="Lector QR para sistema de acceso"
-
-        # Variables de entorno
-        ENV PYTHONDONTWRITEBYTECODE=1 \
-            PYTHONUNBUFFERED=1
-
-        # Instalar dependencias del sistema
-        RUN apt-get update && apt-get install -y \
-            gcc \
-            curl \
-            libzbar0 \
-            && rm -rf /var/lib/apt/lists/*
-
-        # Crear usuario no-root
-        RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-        # Crear directorio de trabajo
-        WORKDIR /app
-
-        # Copiar archivos de dependencias
-        COPY requirements.txt .
-
-        # Instalar dependencias de Python
-        RUN pip install --no-cache-dir --upgrade pip && \
-            pip install --no-cache-dir -r requirements.txt
-
-        # Copiar código fuente
-        COPY . .
-
-        # Cambiar propietario de archivos
-        RUN chown -R appuser:appuser /app
-
-        # Cambiar a usuario no-root
-        USER appuser
-
-        # Exponer puerto
-        EXPOSE 8000
-
-        # Comando por defecto
-        CMD ["python", "app.py"]
-        EOF
-              ;;
-            "web-api")
-              cat > "${{ matrix.service.dockerfile }}" << 'EOF'
-        FROM python:3.11-slim
-
-        # Metadatos
-        LABEL maintainer="acceso.informaticauaint.com"
-        LABEL description="Web API para sistema de acceso"
-
+        
         # Variables de entorno
         ENV PYTHONDONTWRITEBYTECODE=1 \
             PYTHONUNBUFFERED=1 \
-            FLASK_APP=app.py \
-            FLASK_ENV=production
-
-        # Instalar dependencias del sistema
-        RUN apt-get update && apt-get install -y \
+            PIP_NO_CACHE_DIR=1 \
+            PIP_DISABLE_PIP_VERSION_CHECK=1
+        
+        # Instalar dependencias del sistema para QR
+        RUN apt-get update && apt-get install -y --no-install-recommends \
             gcc \
             curl \
-            && rm -rf /var/lib/apt/lists/*
-
+            libzbar0 \
+            libzbar-dev \
+            && rm -rf /var/lib/apt/lists/* \
+            && apt-get clean
+        
         # Crear usuario no-root
         RUN groupadd -r appuser && useradd -r -g appuser appuser
-
+        
         # Crear directorio de trabajo
         WORKDIR /app
-
-        # Copiar archivos de dependencias
+        
+        # Copiar y instalar dependencias
         COPY requirements.txt .
-
-        # Instalar dependencias de Python
         RUN pip install --no-cache-dir --upgrade pip && \
             pip install --no-cache-dir -r requirements.txt
-
+        
         # Copiar código fuente
         COPY . .
-
+        
         # Cambiar propietario de archivos
         RUN chown -R appuser:appuser /app
-
+        
         # Cambiar a usuario no-root
         USER appuser
-
+        
         # Exponer puerto
-        EXPOSE 5000
-
-        # Comando de salud
+        EXPOSE 8000
+        
+        # Health check básico
         HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-            CMD curl -f http://localhost:5000/api/health || exit 1
-
+            CMD curl -f http://localhost:8000/health || exit 1
+        
         # Comando por defecto
-        CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "60", "app:app"]
+        CMD ["python", "app.py"]
         EOF
               ;;
           esac
@@ -350,22 +304,21 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
 
   # ========================================
-  # SECURITY SCAN
+  # SECURITY SCAN (Solo en main/master)
   # ========================================
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
     needs: [frontend, backend]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     environment: Prod
     
     strategy:
+      fail-fast: false  # Continuar aunque falle un scan
       matrix:
         image:
-          # Frontend images
           - asistencias-qr
           - estudiantes-qr
-          # Backend images
           - acceso-api-estudiantes
           - acceso-lector-qr
           - acceso-web-api
@@ -378,6 +331,7 @@ jobs:
         format: 'sarif'
         output: 'trivy-results-${{ matrix.image }}.sarif'
         severity: 'CRITICAL,HIGH'
+        exit-code: '0'  # No fallar el workflow por vulnerabilidades
 
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3
@@ -385,135 +339,118 @@ jobs:
       with:
         sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
 
-  # ========================================
-  # DEPLOYMENT NOTIFICATION
-  # ========================================
-  deployment-notification:
-    name: Deployment Notification
-    runs-on: ubuntu-latest
-    needs: [frontend, backend, security-scan]
-    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: Prod
-
-    steps:
-    - name: Generate deployment summary
+    - name: Generate security summary
+      if: always()
       run: |
-        echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 🔍 Security Scan: ${{ matrix.image }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: \`${{ env.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Scanner**: Trivy (CRITICAL,HIGH)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Results**: Uploaded to Security tab" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "## ✅ Images Built Successfully" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🎨 Frontend Applications:" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest\` - Aplicación para Ayudantes" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest\` - Aplicación para Estudiantes" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### ⚙️ Backend Services:" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest\` - API de Estudiantes" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest\` - Servicio Lector QR" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest\` - API Web Principal" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "## 🐳 Quick Deploy Commands" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Pull all images:" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-        echo "# Frontend" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "# Backend" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🔄 Quick restart (if using docker-compose):" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-        echo "docker-compose pull && docker-compose up -d --force-recreate" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "---" >> $GITHUB_STEP_SUMMARY
-        echo "📊 **Build Info**: Commit \`${{ github.sha }}\` | Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
 
-    - name: Notify deployment status
-      if: success()
-      run: |
-        echo "✅ All services built and pushed successfully!"
-        echo "🔍 Security scans completed"
-        echo "🎯 Ready for deployment"
-
-# ========================================
-  # NOTIFICAR SERVIDOR REMOTO
   # ========================================
-  notify-server:
-    name: Notify Remote Server
+  # NOTIFICACIÓN Y DEPLOYMENT CONSOLIDADO
+  # ========================================
+  deploy-and-notify:
+    name: Deploy & Notify Server
     runs-on: ubuntu-latest
     needs: [frontend, backend]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    environment: Prod
+
     steps:
     - name: Generate webhook payload
       id: payload
       run: |
-        # Crear payload en una sola línea para evitar problemas
+        # Crear payload optimizado
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        PAYLOAD='{"ref":"${{ github.ref }}","repository":"${{ github.repository }}","commit":"${{ github.sha }}","pusher":"${{ github.actor }}","timestamp":"'$TIMESTAMP'"}'
+        PAYLOAD=$(cat << EOF | tr -d '\n\t ' | sed 's/,}/}/'
+        {
+          "ref": "${{ github.ref }}",
+          "repository": "${{ github.repository }}",
+          "commit": "${{ github.sha }}",
+          "pusher": "${{ github.actor }}",
+          "timestamp": "$TIMESTAMP",
+          "workflow_run": "${{ github.run_id }}",
+          "images": [
+            "${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest",
+            "${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest",
+            "${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest",
+            "${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest",
+            "${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest"
+          ]
+        }
+        EOF
+        )
         
-        # Usar multiline output para manejar caracteres especiales
+        # Guardar payload usando multiline output
         {
           echo "payload<<EOF"
           echo "$PAYLOAD"
           echo "EOF"
         } >> $GITHUB_OUTPUT
+        
+        echo "📦 Payload generado: $PAYLOAD"
 
     - name: Generate signature
       id: signature
       run: |
-        # Debug: mostrar el payload antes de firmar
-        echo "🔍 Payload a firmar:"
-        echo '${{ steps.payload.outputs.payload }}'
-        echo ""
+        # Verificar que el secret existe
+        if [ -z "${{ secrets.WEBHOOK_SECRET }}" ]; then
+          echo "❌ ERROR: WEBHOOK_SECRET no está configurado"
+          exit 1
+        fi
         
-        # Generar firma usando el mismo método que funciona manualmente
-        SIGNATURE=$(echo -n '${{ steps.payload.outputs.payload }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' -binary | xxd -p -c 256)
+        # Generar firma usando el método estándar
+        SIGNATURE=$(echo -n '${{ steps.payload.outputs.payload }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' | cut -d' ' -f2)
+        
         echo "🔐 Firma generada: sha256=$SIGNATURE"
         echo "signature=sha256=$SIGNATURE" >> $GITHUB_OUTPUT
 
     - name: Trigger server update
+      id: webhook
       run: |
         echo "🚀 Enviando webhook al servidor..."
         
-        # Verificar que el secret existe
+        # Verificar configuración
         if [ -z "${{ secrets.SERVER_WEBHOOK_URL }}" ]; then
-          echo "❌ ERROR: SERVER_WEBHOOK_URL secret no está configurado"
-          exit 1
-        fi
-        
-        if [ -z "${{ secrets.WEBHOOK_SECRET }}" ]; then
-          echo "❌ ERROR: WEBHOOK_SECRET secret no está configurado"
+          echo "❌ ERROR: SERVER_WEBHOOK_URL no está configurado"
           exit 1
         fi
         
         echo "🎯 URL destino: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
         echo "🔐 Firma: ${{ steps.signature.outputs.signature }}"
-        echo "📦 Payload: ${{ steps.payload.outputs.payload }}"
         echo ""
         
-        RESPONSE=$(curl -s -w "%{http_code}" \
+        # Enviar webhook con timeout
+        RESPONSE=$(timeout 30 curl -s -w "%{http_code}" \
           -X POST \
           -H "Content-Type: application/json" \
           -H "X-Hub-Signature-256: ${{ steps.signature.outputs.signature }}" \
+          -H "User-Agent: GitHub-Actions/${{ github.run_id }}" \
           -d '${{ steps.payload.outputs.payload }}' \
-          "${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update")
+          "${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update" || echo "000timeout")
+        
+        # Procesar respuesta
+        if [[ "$RESPONSE" == *"timeout" ]]; then
+          echo "⏰ Timeout en la petición"
+          echo "webhook_status=timeout" >> $GITHUB_OUTPUT
+          exit 1
+        fi
         
         HTTP_CODE="${RESPONSE: -3}"
         BODY="${RESPONSE%???}"
         
         echo "📊 Código de respuesta: $HTTP_CODE"
-        echo "📝 Respuesta: $BODY"
+        echo "📝 Respuesta del servidor: $BODY"
         
+        # Evaluar resultado
         if [ "$HTTP_CODE" -eq 200 ]; then
           echo "✅ Webhook enviado exitosamente"
+          echo "webhook_status=success" >> $GITHUB_OUTPUT
         else
           echo "❌ Error enviando webhook (HTTP $HTTP_CODE)"
+          echo "webhook_status=error" >> $GITHUB_OUTPUT
           
           # Debug adicional
           echo "🔍 Debug info:"
@@ -524,15 +461,64 @@ jobs:
         fi
 
     - name: Verify server health
+      if: steps.webhook.outputs.webhook_status == 'success'
       run: |
         echo "🔍 Verificando salud del servidor..."
         
-        sleep 5  # Dar tiempo para que el servidor procese
+        # Esperar un poco para que el servidor procese
+        sleep 10
         
-        HEALTH_RESPONSE=$(curl -s ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/health || echo "ERROR")
+        # Verificar health check
+        HEALTH_RESPONSE=$(timeout 15 curl -s "${{ secrets.SERVER_WEBHOOK_URL }}/webhook/health" || echo "ERROR")
         
         if echo "$HEALTH_RESPONSE" | grep -q "healthy"; then
-          echo "✅ Servidor saludable"
+          echo "✅ Servidor respondiendo correctamente"
+          echo "🎯 Servidor procesando actualización..."
         else
-          echo "⚠️  Servidor no responde correctamente"
+          echo "⚠️  Servidor no responde al health check"
+          echo "🔍 Respuesta: $HEALTH_RESPONSE"
         fi
+
+    - name: Generate deployment summary
+      if: always()
+      run: |
+        # Determinar estado del deployment
+        WEBHOOK_STATUS="${{ steps.webhook.outputs.webhook_status }}"
+        
+        echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$WEBHOOK_STATUS" = "success" ]; then
+          echo "## ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+        elif [ "$WEBHOOK_STATUS" = "timeout" ]; then
+          echo "## ⏰ Deployment Timeout" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🎨 Frontend Applications:" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest\` - Aplicación para Ayudantes" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest\` - Aplicación para Estudiantes" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚙️ Backend Services:" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest\` - API de Estudiantes" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest\` - Servicio Lector QR" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest\` - API Web Principal" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Build Information:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Pusher**: \`${{ github.actor }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Workflow Run**: \`${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "$WEBHOOK_STATUS" = "success" ]; then
+          echo "### 🔗 Server Status:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Webhook**: ✅ Sent successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- **Server**: 🔄 Processing update..." >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "_Deployment completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)_" >> $GITHUB_STEP_SUMMARY
