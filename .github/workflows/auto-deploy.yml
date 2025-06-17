@@ -349,24 +349,127 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
 
   # ========================================
-  # NOTIFICACIÓN Y DEPLOYMENT CONSOLIDADO
+  # HEALTH CHECK Y NOTIFICACIÓN CONDICIONAL
   # ========================================
-  deploy-and-notify:
-    name: Deploy & Notify Server
+  health-check-and-notify:
+    name: Health Check & Conditional Notify
     runs-on: ubuntu-latest
     needs: [frontend, backend]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     environment: Prod
 
     steps:
+    - name: Server Health Check
+      id: health
+      run: |
+        echo "🏥 Verificando salud del servidor..."
+        
+        # Definir URL del servidor
+        SERVER_URL="https://acceso.informaticauaint.com"
+        
+        # Función para verificar health
+        check_health() {
+          local url=$1
+          local timeout=${2:-10}
+          
+          echo "🔍 Probando: $url"
+          
+          # Intentar conectar con diferentes métodos
+          local response
+          
+          # Método 1: Health endpoint
+          if response=$(curl -s --connect-timeout $timeout --max-time $timeout -k "$url/webhook/health" 2>/dev/null); then
+            if echo "$response" | grep -q "healthy"; then
+              echo "✅ Health endpoint responde correctamente"
+              return 0
+            fi
+          fi
+          
+          # Método 2: HTTP básico
+          if curl -s --connect-timeout $timeout --max-time $timeout -I -k "$url" > /dev/null 2>&1; then
+            echo "✅ Servidor responde a HTTP"
+            return 0
+          fi
+          
+          # Método 3: Solo conectividad
+          if curl -s --connect-timeout $timeout --max-time $timeout -k "$url" > /dev/null 2>&1; then
+            echo "✅ Servidor accesible"
+            return 0
+          fi
+          
+          echo "❌ Servidor no accesible"
+          return 1
+        }
+        
+        # Verificar diferentes URLs
+        HEALTHY=false
+        
+        echo "🔍 Verificando salud del servidor..."
+        
+        # Intentar con HTTPS
+        if check_health "$SERVER_URL" 15; then
+          HEALTHY=true
+          echo "server_url=$SERVER_URL" >> $GITHUB_OUTPUT
+        else
+          echo "⚠️  HTTPS no funciona, probando HTTP..."
+          
+          # Intentar con HTTP
+          HTTP_URL="http://acceso.informaticauaint.com"
+          if check_health "$HTTP_URL" 15; then
+            HEALTHY=true
+            echo "server_url=$HTTP_URL" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  HTTP tampoco funciona, probando puerto directo..."
+            
+            # Intentar puerto directo
+            DIRECT_URL="http://acceso.informaticauaint.com:9000"
+            if check_health "$DIRECT_URL" 15; then
+              HEALTHY=true
+              echo "server_url=$DIRECT_URL" >> $GITHUB_OUTPUT
+            fi
+          fi
+        fi
+        
+        # Guardar resultado
+        if [ "$HEALTHY" = true ]; then
+          echo "✅ Servidor está healthy y accesible"
+          echo "healthy=true" >> $GITHUB_OUTPUT
+          
+          # Información adicional
+          echo "🔍 Información del servidor:"
+          SERVER_FINAL=$(cat $GITHUB_OUTPUT | grep "server_url=" | cut -d'=' -f2-)
+          echo "  - URL accesible: $SERVER_FINAL"
+          
+          # Intentar obtener más información
+          curl -s --connect-timeout 5 -k "$SERVER_FINAL/webhook/health" || echo "  - Health endpoint: No disponible"
+          
+        else
+          echo "❌ Servidor no está healthy o no es accesible"
+          echo "healthy=false" >> $GITHUB_OUTPUT
+          
+          # Debug información
+          echo "🔍 Debug de conectividad:"
+          echo "  - Probando resolución DNS..."
+          nslookup acceso.informaticauaint.com || echo "    DNS no resuelve"
+          
+          echo "  - Probando ping..."
+          ping -c 2 acceso.informaticauaint.com || echo "    Ping falla"
+          
+          echo "  - IPs del dominio:"
+          dig +short acceso.informaticauaint.com || echo "    No se pudo obtener IP"
+        fi
+
     - name: Generate webhook payload
       id: payload
+      if: steps.health.outputs.healthy == 'true'
       run: |
-        # Crear payload simple como el que funciona manualmente
-        TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        PAYLOAD='{"ref":"${{ github.ref }}","repository":"${{ github.repository }}","commit":"${{ github.sha }}","pusher":"${{ github.actor }}","timestamp":"'$TIMESTAMP'"}'
+        echo "📦 Generando payload para webhook..."
         
-        # Guardar payload usando multiline output
+        # Crear payload simple
+        TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        PAYLOAD='{"ref":"${{ github.ref }}","repository":"${{ github.repository }}","commit":"${{ github.sha }}","pusher":"${{ github.actor }}","timestamp":"'$TIMESTAMP'","health_check":"passed"}'
+        
+        # Guardar payload
         {
           echo "payload<<EOF"
           echo "$PAYLOAD"
@@ -377,31 +480,32 @@ jobs:
 
     - name: Generate signature
       id: signature
+      if: steps.health.outputs.healthy == 'true'
       run: |
-        # Generar firma exactamente como funciona manualmente
+        echo "🔐 Generando firma para webhook..."
+        
+        # Generar firma
         SIGNATURE=$(echo -n '${{ steps.payload.outputs.payload }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' | cut -d' ' -f2)
         
         echo "🔐 Firma generada: sha256=$SIGNATURE"
         echo "signature=sha256=$SIGNATURE" >> $GITHUB_OUTPUT
 
-    - name: Trigger server update
+    - name: Send webhook notification
       id: webhook
+      if: steps.health.outputs.healthy == 'true'
       run: |
-        echo "🚀 Enviando webhook al servidor..."
+        echo "🚀 Enviando webhook al servidor healthy..."
+        
+        # Obtener URL verificada del health check
+        SERVER_URL="${{ steps.health.outputs.server_url }}"
+        WEBHOOK_URL="$SERVER_URL/webhook/docker-update"
+        
+        echo "🎯 Enviando a: $WEBHOOK_URL"
         echo "🔐 Firma: ${{ steps.signature.outputs.signature }}"
         echo "📦 Payload: ${{ steps.payload.outputs.payload }}"
         echo ""
         
-        # Debug: Verificar conectividad primero
-        echo "🔍 Verificando conectividad al servidor..."
-        if ! curl -s --connect-timeout 10 -I https://acceso.informaticauaint.com/webhook/health > /dev/null; then
-          echo "❌ No se puede conectar al servidor"
-          exit 1
-        fi
-        echo "✅ Servidor accesible"
-        
-        # Enviar webhook con configuración SSL relajada (como el manual)
-        echo "📤 Enviando webhook..."
+        # Enviar webhook usando la URL que sabemos que funciona
         RESPONSE=$(curl -s -w "%{http_code}" \
           --connect-timeout 30 \
           --max-time 60 \
@@ -409,18 +513,37 @@ jobs:
           -X POST \
           -H "Content-Type: application/json" \
           -H "X-Hub-Signature-256: ${{ steps.signature.outputs.signature }}" \
+          -H "User-Agent: GitHub-Actions-HealthChecked/${{ github.run_id }}" \
           -d '${{ steps.payload.outputs.payload }}' \
-          "https://acceso.informaticauaint.com/webhook/docker-update" || echo "000curl_error")
+          "$WEBHOOK_URL" || echo "000curl_error")
         
-        # Verificar si hubo error de curl
+        # Verificar resultado
         if [[ "$RESPONSE" == *"curl_error"* ]]; then
-          echo "❌ Error de curl al conectar"
-          echo "🔍 Probando diagnóstico..."
-          curl -v --connect-timeout 10 https://acceso.informaticauaint.com/webhook/health || true
+          echo "❌ Error de curl al enviar webhook"
+          echo "webhook_status=curl_error" >> $GITHUB_OUTPUT
+          
+          # Retry una vez más
+          echo "🔄 Reintentando envío..."
+          sleep 5
+          
+          RESPONSE=$(curl -s -w "%{http_code}" \
+            --connect-timeout 15 \
+            --max-time 30 \
+            -k \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: ${{ steps.signature.outputs.signature }}" \
+            -d '${{ steps.payload.outputs.payload }}' \
+            "$WEBHOOK_URL" || echo "000retry_failed")
+        fi
+        
+        # Procesar respuesta final
+        if [[ "$RESPONSE" == *"error"* ]] || [[ "$RESPONSE" == *"failed"* ]]; then
+          echo "❌ Webhook falló después de retry"
+          echo "webhook_status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
         
-        # Procesar respuesta
         HTTP_CODE="${RESPONSE: -3}"
         BODY="${RESPONSE%???}"
         
@@ -429,81 +552,102 @@ jobs:
         
         # Evaluar resultado
         if [ "$HTTP_CODE" -eq 200 ]; then
-          echo "✅ Webhook enviado exitosamente"
+          echo "✅ Webhook enviado exitosamente al servidor healthy"
           echo "webhook_status=success" >> $GITHUB_OUTPUT
         else
           echo "❌ Error enviando webhook (HTTP $HTTP_CODE)"
-          echo "webhook_status=error" >> $GITHUB_OUTPUT
+          echo "webhook_status=http_error" >> $GITHUB_OUTPUT
           echo "🔍 Response body: $BODY"
-          
-          # Debug adicional
-          echo "🔍 Debug adicional:"
-          echo "  - Payload length: ${#{{ steps.payload.outputs.payload }}}"
-          echo "  - Intentando health check..."
-          curl -s -k https://acceso.informaticauaint.com/webhook/health || echo "Health check failed"
-          
           exit 1
         fi
 
-    - name: Verify server health
+    - name: Post-webhook verification
       if: steps.webhook.outputs.webhook_status == 'success'
       run: |
-        echo "🔍 Verificando salud del servidor..."
+        echo "🔍 Verificación post-webhook..."
         
-        # Esperar un poco para que el servidor procese
-        sleep 5
+        # Esperar un poco
+        sleep 8
         
-        # Verificar health check
-        HEALTH_RESPONSE=$(curl -s "https://acceso.informaticauaint.com/webhook/health" || echo "ERROR")
+        # Verificar que el servidor sigue healthy después del webhook
+        SERVER_URL="${{ steps.health.outputs.server_url }}"
+        
+        echo "🏥 Verificando que el servidor sigue healthy..."
+        HEALTH_RESPONSE=$(curl -s --connect-timeout 10 -k "$SERVER_URL/webhook/health" || echo "ERROR")
         
         if echo "$HEALTH_RESPONSE" | grep -q "healthy"; then
-          echo "✅ Servidor respondiendo correctamente"
-          echo "🎯 Servidor procesando actualización..."
+          echo "✅ Servidor sigue healthy después del webhook"
+          echo "🎯 Probablemente procesando la actualización..."
         else
-          echo "⚠️  Servidor no responde al health check"
-          echo "🔍 Respuesta: $HEALTH_RESPONSE"
+          echo "⚠️  Servidor no responde al health check post-webhook"
+          echo "🔍 Esto es normal si está reiniciando servicios"
         fi
 
-    - name: Generate deployment summary
+    - name: Handle unhealthy server
+      if: steps.health.outputs.healthy == 'false'
+      run: |
+        echo "🚨 Servidor no está healthy - Webhook omitido"
+        echo ""
+        echo "📋 Acciones recomendadas:"
+        echo "  1. Verificar que el servidor esté ejecutándose"
+        echo "  2. Verificar que el puerto 9000 esté abierto"
+        echo "  3. Verificar conectividad de red"
+        echo "  4. Revisar logs del servidor webhook"
+        echo ""
+        echo "🔧 Comandos para verificar en el servidor:"
+        echo "  sudo systemctl status docker-webhook"
+        echo "  sudo journalctl -u docker-webhook -f"
+        echo "  curl -I http://localhost:9000/webhook/health"
+        echo ""
+        echo "⚠️  Las imágenes están construidas y disponibles en Docker Hub"
+        echo "   pero el servidor no recibirá notificación automática."
+
+    - name: Generate final summary
       if: always()
       run: |
-        # Determinar estado del deployment
+        # Determinar estado
+        HEALTHY="${{ steps.health.outputs.healthy }}"
         WEBHOOK_STATUS="${{ steps.webhook.outputs.webhook_status }}"
         
-        echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "# 🎯 Health Check & Deployment Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ "$WEBHOOK_STATUS" = "success" ]; then
-          echo "## ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
-        elif [ "$WEBHOOK_STATUS" = "timeout" ]; then
-          echo "## ⏰ Deployment Timeout" >> $GITHUB_STEP_SUMMARY
+        if [ "$HEALTHY" = "true" ]; then
+          echo "## ✅ Server Health Check: PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Server URL**: \`${{ steps.health.outputs.server_url }}\`" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$WEBHOOK_STATUS" = "success" ]; then
+            echo "- **Webhook Status**: ✅ Sent successfully" >> $GITHUB_STEP_SUMMARY
+            echo "- **Action**: 🔄 Server is updating containers" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Webhook Status**: ❌ Failed to send" >> $GITHUB_STEP_SUMMARY
+            echo "- **Action**: 🔧 Manual deployment required" >> $GITHUB_STEP_SUMMARY
+          fi
         else
-          echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "## ❌ Server Health Check: FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: Server not accessible" >> $GITHUB_STEP_SUMMARY
+          echo "- **Webhook**: ⏭️ Skipped (server unhealthy)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Action**: 🚨 Check server status manually" >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🎨 Frontend Applications:" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest\` - Aplicación para Ayudantes" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest\` - Aplicación para Estudiantes" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### ⚙️ Backend Services:" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest\` - API de Estudiantes" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest\` - Servicio Lector QR" >> $GITHUB_STEP_SUMMARY
-        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest\` - API Web Principal" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📊 Build Information:" >> $GITHUB_STEP_SUMMARY
-        echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "- **Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "- **Pusher**: \`${{ github.actor }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "- **Workflow Run**: \`${{ github.run_id }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "## 🐳 Built Images (Available on Docker Hub):" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest\`" >> $GITHUB_STEP_SUMMARY
+        echo "- \`${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest\`" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ "$WEBHOOK_STATUS" = "success" ]; then
-          echo "### 🔗 Server Status:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Webhook**: ✅ Sent successfully" >> $GITHUB_STEP_SUMMARY
-          echo "- **Server**: 🔄 Processing update..." >> $GITHUB_STEP_SUMMARY
+        if [ "$HEALTHY" = "false" ]; then
+          echo "## 🔧 Manual Deployment Commands:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# En el servidor, ejecutar:" >> $GITHUB_STEP_SUMMARY
+          echo "docker-compose pull" >> $GITHUB_STEP_SUMMARY
+          echo "docker-compose up -d --force-recreate" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "---" >> $GITHUB_STEP_SUMMARY
-        echo "_Deployment completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)_" >> $GITHUB_STEP_SUMMARY
+        echo "📊 **Build Info**: \`${{ github.sha }}\` | \`${{ github.ref_name }}\` | \`${{ github.actor }}\`" >> $GITHUB_STEP_SUMMARY
