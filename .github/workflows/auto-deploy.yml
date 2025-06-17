@@ -392,13 +392,33 @@ jobs:
         echo "📦 Payload: ${{ steps.payload.outputs.payload }}"
         echo ""
         
-        # Enviar webhook usando URL hardcodeada (como el manual que funciona)
+        # Debug: Verificar conectividad primero
+        echo "🔍 Verificando conectividad al servidor..."
+        if ! curl -s --connect-timeout 10 -I https://acceso.informaticauaint.com/webhook/health > /dev/null; then
+          echo "❌ No se puede conectar al servidor"
+          exit 1
+        fi
+        echo "✅ Servidor accesible"
+        
+        # Enviar webhook con configuración SSL relajada (como el manual)
+        echo "📤 Enviando webhook..."
         RESPONSE=$(curl -s -w "%{http_code}" \
+          --connect-timeout 30 \
+          --max-time 60 \
+          -k \
           -X POST \
           -H "Content-Type: application/json" \
           -H "X-Hub-Signature-256: ${{ steps.signature.outputs.signature }}" \
           -d '${{ steps.payload.outputs.payload }}' \
-          "https://acceso.informaticauaint.com/webhook/docker-update")
+          "https://acceso.informaticauaint.com/webhook/docker-update" || echo "000curl_error")
+        
+        # Verificar si hubo error de curl
+        if [[ "$RESPONSE" == *"curl_error"* ]]; then
+          echo "❌ Error de curl al conectar"
+          echo "🔍 Probando diagnóstico..."
+          curl -v --connect-timeout 10 https://acceso.informaticauaint.com/webhook/health || true
+          exit 1
+        fi
         
         # Procesar respuesta
         HTTP_CODE="${RESPONSE: -3}"
@@ -415,6 +435,13 @@ jobs:
           echo "❌ Error enviando webhook (HTTP $HTTP_CODE)"
           echo "webhook_status=error" >> $GITHUB_OUTPUT
           echo "🔍 Response body: $BODY"
+          
+          # Debug adicional
+          echo "🔍 Debug adicional:"
+          echo "  - Payload length: ${#{{ steps.payload.outputs.payload }}}"
+          echo "  - Intentando health check..."
+          curl -s -k https://acceso.informaticauaint.com/webhook/health || echo "Health check failed"
+          
           exit 1
         fi
 
