@@ -29,7 +29,7 @@ COPY api_qr_temporal.py .
 RUN echo "Flask==2.3.3" > requirements.txt && \
     echo "flask-cors==4.0.0" >> requirements.txt && \
     echo "PyMySQL==1.1.0" >> requirements.txt && \
-    echo "gunicorn==21.2.0" >> requirements.txt
+    echo "gunicorn==21.2.0" >> requirements.txt \
     echo "python-dotenv" >> requirements.txt
 
 # Instalar dependencias de Python
