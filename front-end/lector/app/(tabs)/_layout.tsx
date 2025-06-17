@@ -20,24 +20,26 @@ export default function TabLayout() {
         tabBarBackground: TabBarBackground,
         tabBarStyle: Platform.select({
           ios: {
-            // Use a transparent background on iOS to show the blur effect
             position: 'absolute',
           },
-          default: {},
+          default: {
+            // Ocultar tab bar en pantallas pequeñas
+            display: 'none',
+          },
         }),
       }}>
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: 'Lector QR',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="qr-code-scanner" color={color} />,
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="stats"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'Estadísticas',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="bar-chart" color={color} />,
         }}
       />
     </Tabs>

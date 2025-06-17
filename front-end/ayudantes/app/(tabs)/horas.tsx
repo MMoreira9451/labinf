@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
 
 // Corregir la URL para usar HTTPS si el backend usa SSL
-const API_BASE = 'https://acceso.informaticauaint.com/api';
+const API_BASE = 'https://acceso.informaticauaint.com/api/ayudantes';
 
 export default function HorasAcumuladasScreen() {
   const [horasData, setHorasData] = useState([]);

@@ -40,7 +40,7 @@ def create_app():
     app.json = CustomJSONProvider(app)
     
     # Registrar blueprints
-    app.register_blueprint(auth_bp, url_prefix='/api')
+    app.register_blueprint(auth_bp, url_prefix='/api/ayudantes')
     app.register_blueprint(registros_bp)
     app.register_blueprint(usuarios_bp)
     app.register_blueprint(horarios_bp)
