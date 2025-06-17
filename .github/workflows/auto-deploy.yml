@@ -8,6 +8,14 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# ========================================
+# PERMISOS PARA SECURITY SCANNING
+# ========================================
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 env:
   REGISTRY: docker.io
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -313,6 +321,12 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     environment: Prod
     
+    # Permisos específicos para este job
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    
     strategy:
       fail-fast: false  # Continuar aunque falle un scan
       matrix:
@@ -324,6 +338,10 @@ jobs:
           - acceso-web-api
 
     steps:
+    # Checkout necesario para SARIF upload
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
@@ -338,6 +356,7 @@ jobs:
       if: always()
       with:
         sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
+        category: 'trivy-${{ matrix.image }}'  # Categoría para distinguir scans
 
     - name: Generate security summary
       if: always()
@@ -346,6 +365,13 @@ jobs:
         echo "- **Image**: \`${{ env.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest\`" >> $GITHUB_STEP_SUMMARY
         echo "- **Scanner**: Trivy (CRITICAL,HIGH)" >> $GITHUB_STEP_SUMMARY
         echo "- **Results**: Uploaded to Security tab" >> $GITHUB_STEP_SUMMARY
+        
+        # Mostrar resumen de vulnerabilidades si existe
+        if [ -f "trivy-results-${{ matrix.image }}.sarif" ]; then
+          VULN_COUNT=$(cat "trivy-results-${{ matrix.image }}.sarif" | jq '.runs[0].results | length' 2>/dev/null || echo "0")
+          echo "- **Vulnerabilities Found**: $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+        fi
+        
         echo "" >> $GITHUB_STEP_SUMMARY
 
   # ========================================
