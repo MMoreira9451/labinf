@@ -362,26 +362,9 @@ jobs:
     - name: Generate webhook payload
       id: payload
       run: |
-        # Crear payload optimizado
+        # Crear payload simple como el que funciona manualmente
         TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        PAYLOAD=$(cat << EOF | tr -d '\n\t ' | sed 's/,}/}/'
-        {
-          "ref": "${{ github.ref }}",
-          "repository": "${{ github.repository }}",
-          "commit": "${{ github.sha }}",
-          "pusher": "${{ github.actor }}",
-          "timestamp": "$TIMESTAMP",
-          "workflow_run": "${{ github.run_id }}",
-          "images": [
-            "${{ env.DOCKERHUB_USERNAME }}/asistencias-qr:latest",
-            "${{ env.DOCKERHUB_USERNAME }}/estudiantes-qr:latest",
-            "${{ env.DOCKERHUB_USERNAME }}/acceso-api-estudiantes:latest",
-            "${{ env.DOCKERHUB_USERNAME }}/acceso-lector-qr:latest",
-            "${{ env.DOCKERHUB_USERNAME }}/acceso-web-api:latest"
-          ]
-        }
-        EOF
-        )
+        PAYLOAD='{"ref":"${{ github.ref }}","repository":"${{ github.repository }}","commit":"${{ github.sha }}","pusher":"${{ github.actor }}","timestamp":"'$TIMESTAMP'"}'
         
         # Guardar payload usando multiline output
         {
@@ -395,13 +378,7 @@ jobs:
     - name: Generate signature
       id: signature
       run: |
-        # Verificar que el secret existe
-        if [ -z "${{ secrets.WEBHOOK_SECRET }}" ]; then
-          echo "❌ ERROR: WEBHOOK_SECRET no está configurado"
-          exit 1
-        fi
-        
-        # Generar firma usando el método estándar
+        # Generar firma exactamente como funciona manualmente
         SIGNATURE=$(echo -n '${{ steps.payload.outputs.payload }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' | cut -d' ' -f2)
         
         echo "🔐 Firma generada: sha256=$SIGNATURE"
@@ -411,33 +388,19 @@ jobs:
       id: webhook
       run: |
         echo "🚀 Enviando webhook al servidor..."
-        
-        # Verificar configuración
-        if [ -z "${{ secrets.SERVER_WEBHOOK_URL }}" ]; then
-          echo "❌ ERROR: SERVER_WEBHOOK_URL no está configurado"
-          exit 1
-        fi
-        
-        echo "🎯 URL destino: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
         echo "🔐 Firma: ${{ steps.signature.outputs.signature }}"
+        echo "📦 Payload: ${{ steps.payload.outputs.payload }}"
         echo ""
         
-        # Enviar webhook con timeout
-        RESPONSE=$(timeout 30 curl -s -w "%{http_code}" \
+        # Enviar webhook usando URL hardcodeada (como el manual que funciona)
+        RESPONSE=$(curl -s -w "%{http_code}" \
           -X POST \
           -H "Content-Type: application/json" \
           -H "X-Hub-Signature-256: ${{ steps.signature.outputs.signature }}" \
-          -H "User-Agent: GitHub-Actions/${{ github.run_id }}" \
           -d '${{ steps.payload.outputs.payload }}' \
-          "${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update" || echo "000timeout")
+          "https://acceso.informaticauaint.com/webhook/docker-update")
         
         # Procesar respuesta
-        if [[ "$RESPONSE" == *"timeout" ]]; then
-          echo "⏰ Timeout en la petición"
-          echo "webhook_status=timeout" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
         HTTP_CODE="${RESPONSE: -3}"
         BODY="${RESPONSE%???}"
         
@@ -451,12 +414,7 @@ jobs:
         else
           echo "❌ Error enviando webhook (HTTP $HTTP_CODE)"
           echo "webhook_status=error" >> $GITHUB_OUTPUT
-          
-          # Debug adicional
-          echo "🔍 Debug info:"
-          echo "  - URL: ${{ secrets.SERVER_WEBHOOK_URL }}/webhook/docker-update"
-          echo "  - Payload length: ${#{{ steps.payload.outputs.payload }}}"
-          echo "  - Response body: $BODY"
+          echo "🔍 Response body: $BODY"
           exit 1
         fi
 
@@ -466,10 +424,10 @@ jobs:
         echo "🔍 Verificando salud del servidor..."
         
         # Esperar un poco para que el servidor procese
-        sleep 10
+        sleep 5
         
         # Verificar health check
-        HEALTH_RESPONSE=$(timeout 15 curl -s "${{ secrets.SERVER_WEBHOOK_URL }}/webhook/health" || echo "ERROR")
+        HEALTH_RESPONSE=$(curl -s "https://acceso.informaticauaint.com/webhook/health" || echo "ERROR")
         
         if echo "$HEALTH_RESPONSE" | grep -q "healthy"; then
           echo "✅ Servidor respondiendo correctamente"
