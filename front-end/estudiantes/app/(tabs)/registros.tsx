@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 
 // Constante para la URL de la API
-const API_BASE = 'https://acceso.informaticauaint.com/api';
+const API_BASE = 'https://acceso.informaticauaint.com/api/estudiantes';
 
 // Tipo para los datos de registro
 type Registro = {
