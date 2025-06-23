@@ -31,7 +31,7 @@ def get_ayudantes_presentes():
             # Buscar ayudantes basados en la tabla registros
             # Un ayudante está presente si su último registro del día es de tipo 'Entrada'
             cursor.execute("""
-                SELECT r.email, r.nombre, r.apellido, r.hora as ultima_entrada, u.foto_url
+                SELECT r.email, r.nombre, r.apellido, r.hora as ultima_entrada
                 FROM registros r
                 JOIN (
                     -- Subconsulta para obtener el ID del último registro de cada usuario en el día actual
