@@ -1,4 +1,4 @@
-# Dockerfile para API Estudiantes
+# back-end/estudiantes/Dockerfile
 FROM python:3.11-slim
 
 # Metadatos
