@@ -37,9 +37,9 @@ jobs:
           - name: front-end-web
             path: front-end/web
             image_name: front-end-web
-          #- name: front-lector
+          #- name: front-end-lector
           #  path: front-end/lector
-          #  image_name: front-lector
+          #  image_name: front-end--lector
 
     steps:
     - name: Checkout repository
@@ -127,18 +127,18 @@ jobs:
     strategy:
       matrix:
         service:
-          - name: backend-estudiantes
+          - name: back-end-estudiantes
             context: back-end/estudiantes
             dockerfile: back-end/estudiantes/Dockerfile
-            image_name: backend-estudiantes
-          - name: backend-lector
+            image_name: back-end-estudiantes
+          - name: back-end-lector
             context: back-end/lector
             dockerfile: back-end/lector/Dockerfile
-            image_name: backend-lector
-          - name: backend-ayudantes
+            image_name: back-end-lector
+          - name: back-end-ayudantes
             context: back-end/ayudantes
             dockerfile: back-end/ayudantes/Dockerfile
-            image_name: backend-ayudantes
+            image_name: back-end-ayudantes
 
     steps:
     - name: Checkout repository
