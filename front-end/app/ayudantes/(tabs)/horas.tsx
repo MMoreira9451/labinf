@@ -1,9 +1,9 @@
-// app/horas.tsx
+// app/horas.tsx - ARCHIVO CORREGIDO COMPLETO
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 
-// Corregir la URL para usar HTTPS si el backend usa SSL
-const API_BASE = 'https://acceso.informaticauaint.com/api/ayudantes';
+// ✅ CORRECCIÓN 1: Cambiar API_BASE
+const API_BASE = 'https://acceso.informaticauaint.com/api';
 
 export default function HorasAcumuladasScreen() {
   const [horasData, setHorasData] = useState([]);
@@ -17,10 +17,11 @@ export default function HorasAcumuladasScreen() {
     setLoading(true);
     setError(null);
     
-    console.log("Cargando datos desde:", `${API_BASE}/horas_acumuladas`);
+    // ✅ CORRECCIÓN 2: Usar el endpoint correcto
+    console.log("Cargando datos desde:", `${API_BASE}/ayudantes/horas_acumuladas`);
     
-    fetch(`${API_BASE}/horas_acumuladas`, {
-      // Opciones adicionales para manejar HTTPS sin certificados válidos en desarrollo
+    fetch(`${API_BASE}/ayudantes/horas_acumuladas`, {
+      // ✅ CORRECCIÓN 3: Platform ya está importado arriba
       ...(Platform.OS === 'web' ? {} : { headers: { 'Cache-Control': 'no-cache' } })
     })
       .then(res => {
@@ -29,12 +30,20 @@ export default function HorasAcumuladasScreen() {
         }
         return res.json();
       })
-      .then(data => {
-        console.log("Datos recibidos:", data);
-        // Asegurar que data es un array y contiene los campos esperados
-        if (!Array.isArray(data)) {
+      .then(result => {
+        console.log("Datos recibidos:", result);
+        
+        // ✅ CORRECCIÓN 4: Manejar la estructura {status, data, timestamp}
+        let data;
+        if (result.status === 'success' && Array.isArray(result.data)) {
+          data = result.data;
+        } else if (Array.isArray(result)) {
+          // Fallback por si el endpoint devuelve directamente un array
+          data = result;
+        } else {
           throw new Error('Formato de datos incorrecto');
         }
+        
         // Validar que todos los elementos tengan los campos necesarios
         setHorasData(data.map(item => ({
           nombre: item.nombre || 'Sin nombre',
@@ -156,6 +165,7 @@ export default function HorasAcumuladasScreen() {
   );
 }
 
+// Los estilos permanecen igual...
 const styles = StyleSheet.create({
   container: {
     flex: 1,
