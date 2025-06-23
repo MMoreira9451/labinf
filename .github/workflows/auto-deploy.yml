@@ -34,12 +34,9 @@ jobs:
     strategy:
       matrix:
         app:
-          - name: ayudantes
-            path: front-end/ayudantes
-            image_name: asistencias-qr
-          - name: estudiantes
-            path: front-end/estudiantes
-            image_name: estudiantes-qr
+          - name: front-end-web
+            path: front-end/web
+            image_name: front-end-web
           #- name: front-lector
           #  path: front-end/lector
           #  image_name: front-lector
@@ -130,18 +127,18 @@ jobs:
     strategy:
       matrix:
         service:
-          - name: api-estudiantes
-            context: back-end/api_estudiantes
-            dockerfile: back-end/api_estudiantes/Dockerfile
-            image_name: acceso-api-estudiantes
-          - name: lector-qr
+          - name: backend-estudiantes
+            context: back-end/estudiantes
+            dockerfile: back-end/estudiantes/Dockerfile
+            image_name: backend-estudiantes
+          - name: backend-lector
             context: back-end/lector
             dockerfile: back-end/lector/Dockerfile
-            image_name: acceso-lector-qr
-          - name: web-api
-            context: back-end/web
-            dockerfile: back-end/web/Dockerfile
-            image_name: acceso-web-api
+            image_name: backend-lector
+          - name: backend-ayudantes
+            context: back-end/ayudantes
+            dockerfile: back-end/ayudantes/Dockerfile
+            image_name: backend-ayudantes
 
     steps:
     - name: Checkout repository
