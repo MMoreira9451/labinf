@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import kivy
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
@@ -6,50 +7,78 @@ from kivy.uix.button import Button
 from kivy.uix.image import Image
 from kivy.clock import Clock
 from kivy.graphics.texture import Texture
-from kivy.uix.modalview import ModalView
 from kivy.utils import get_color_from_hex
 from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle
+from kivy.uix.popup import Popup
+from kivy.uix.textinput import TextInput
+
 import cv2
-from pyzbar.pyzbar import decode
-import json
+import mediapipe as mp
+import numpy as np
+import mysql.connector
+from deepface import DeepFace
+from scipy.spatial.distance import cosine
 import time
-from datetime import datetime, timedelta
-import pymysql
-import unicodedata
+import json
+from datetime import datetime
+import threading
 import sys
 import requests
-import threading
 import urllib3
-from datetime import datetime
+from pyzbar.pyzbar import decode
 
-# Deshabilitar advertencias de SSL para desarrollo (en producción, usar certificados válidos)
+# Deshabilitar warnings SSL si es necesario
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Definir colores para la interfaz
-COLORS = {
-    'primary': '#3498db',      # Azul principal
-    'success': '#2ecc71',      # Verde para éxito
-    'error': '#e74c3c',        # Rojo para error
-    'warning': '#f39c12',      # Amarillo para advertencia
-    'dark_bg': '#2c3e50',      # Fondo oscuro
-    'light_text': '#ecf0f1',   # Texto claro
-    'dark_text': '#34495e',    # Texto oscuro
-    'accent': '#9b59b6',       # Color de acento
-    'inactive': '#95a5a6',     # Color inactivo
-    'button': '#3498db',       # Color de botón
-    'entry': '#27ae60',        # Color para entrada
-    'exit': '#e67e22'          # Color para salida
+# Configurar ventana
+Window.size = (800, 600)
+Window.resizable = False
+
+# Configuración de la base de datos MySQL
+DB_CONFIG = {
+    'host': '10.0.3.54',
+    'user': 'mm',
+    'password': 'lwNduG0qcBu2RCJ7uRxk',
+    'database': 'registro_qr'
 }
 
-# Configuración de la API
+# Configuracion de la API para QR
 API_CONFIG = {
-    'base_url': 'https://acceso.informaticauaint.com/api',
-    'verify_ssl': False  # Para desarrollo, en producción debería ser True
+    'base_url': 'https://acceso.informaticauaint.com/api-lector',
+    'timeout': 15,
+    'verify_ssl': False,
+    'headers': {
+        'Content-Type': 'application/json',
+        'User-Agent': 'QR-Reader-Client/1.0',
+        'Accept': 'application/json'
+    }
 }
+
+# Colores para la interfaz
+COLORS = {
+    'primary': '#3498db',
+    'success': '#2ecc71',
+    'error': '#e74c3c',
+    'warning': '#f39c12',
+    'dark_bg': '#2c3e50',
+    'light_text': '#ecf0f1',
+    'accent': '#9b59b6',
+    'button': '#3498db',
+    'entry': '#27ae60',
+    'exit': '#e67e22',
+    'student': '#0066CC',
+    'helper': '#FF6B35',
+    'facial': '#8e44ad',
+    'qr_mode': '#16a085'
+}
+
+# Inicializar MediaPipe Face Detection
+mp_face_detection = mp.solutions.face_detection
+face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
 
 class BackgroundLayout(BoxLayout):
-    """Un BoxLayout con un fondo de color"""
+    """BoxLayout con fondo personalizado"""
     def __init__(self, bg_color=COLORS['dark_bg'], **kwargs):
         super(BackgroundLayout, self).__init__(**kwargs)
         self.bg_color = get_color_from_hex(bg_color)
@@ -64,709 +93,1074 @@ class BackgroundLayout(BoxLayout):
         self.bg_rect.pos = self.pos
         self.bg_rect.size = self.size
 
-class LectorQR(BackgroundLayout):
-    def __init__(self, **kwargs):
-        super(LectorQR, self).__init__(bg_color=COLORS['dark_bg'], **kwargs)
-        self.orientation = 'vertical'
-        
-        # Configuración de la cámara
-        self.capture = cv2.VideoCapture(0)
-        self.capture.set(3, 640)  # Ancho
-        self.capture.set(4, 480)  # Alto
-        
-        # Estado del lector
-        self.is_scanning = True
-        self.last_scan_time = 0
-        self.scan_cooldown = 5  # Segundos entre escaneos
-        
-        # Configuración de la base de datos MySQL
-        self.db_config = {
-            'host': '10.0.3.54',
-            'user': 'mm',
-            'password': 'Gin160306',
-            'database': 'registro_qr',
-            'port': 3306,
-            'charset': 'utf8mb4',
-            'cursorclass': pymysql.cursors.DictCursor
-        }
-        
-        # Cache para información de horarios y estado
-        self.usuario_cache = {}
-        self.cache_valid_time = 60  # segundos
-        self.last_cache_update = 0
-        
-        # Verificar y crear tablas necesarias
-        self.verificar_tablas()
-        
-        # Crear la interfaz de usuario
-        self.setup_ui()
-        
-        # Iniciar la actualización de la cámara
-        Clock.schedule_interval(self.update, 1.0 / 30.0)  # 30 FPS
-        
-        # Iniciar hilo para actualizar cache de datos periódicamente
-        threading.Thread(target=self.actualizar_cache_periodicamente, daemon=True).start()
+class DatabaseManager:
+    """Manejador de base de datos"""
     
-    def verificar_tablas(self):
-        """Verifica que existan las tablas necesarias y las crea si no existen"""
+    @staticmethod
+    def get_db_connection():
+        """Obtiene una conexión a la base de datos MySQL"""
         try:
-            conn = self.get_db_connection()
-            if not conn:
-                print("No se pudo conectar a la base de datos para verificar tablas")
-                return
+            conn = mysql.connector.connect(**DB_CONFIG)
+            return conn
+        except mysql.connector.Error as e:
+            print(f"Error conectando a MySQL: {e}")
+            return None
+
+    @staticmethod
+    def init_faces_table():
+        """Crea la tabla de rostros en MySQL si no existe"""
+        conn = DatabaseManager.get_db_connection()
+        if conn is None:
+            return False
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS faces (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    email VARCHAR(100) NOT NULL,
+                    embedding JSON NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_email (email)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            conn.commit()
+            return True
+        except mysql.connector.Error as e:
+            print(f"Error creando tabla faces: {e}")
+            return False
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
+    @staticmethod
+    def get_face_embedding(face_img):
+        """Obtiene el embedding facial usando DeepFace"""
+        try:
+            embedding_obj = DeepFace.represent(face_img, model_name="Facenet512")
+            embedding = np.array(embedding_obj[0]['embedding'])
+            return embedding
+        except Exception as e:
+            print(f"Error al obtener embedding: {e}")
+            return None
+
+    @staticmethod
+    def save_face(name, email, embedding):
+        """Guarda un rostro en la base de datos MySQL"""
+        if embedding is None:
+            return False
+        
+        conn = DatabaseManager.get_db_connection()
+        if conn is None:
+            return False
+        
+        try:
+            cursor = conn.cursor()
+            embedding_list = embedding.tolist()
+            embedding_json = json.dumps(embedding_list)
+            
+            cursor.execute("""
+                INSERT INTO faces (name, email, embedding) 
+                VALUES (%s, %s, %s)
+            """, (name, email, embedding_json))
+            
+            conn.commit()
+            return True
+        except mysql.connector.Error as e:
+            print(f"Error guardando rostro: {e}")
+            return False
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
+    @staticmethod
+    def recognize_face(embedding):
+        """Reconoce un rostro comparando con la base de datos"""
+        if embedding is None:
+            return "Error", None
+        
+        conn = DatabaseManager.get_db_connection()
+        if conn is None:
+            return "Error", None
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, email, embedding FROM faces")
+            known_faces = cursor.fetchall()
+            
+            if not known_faces:
+                return "Desconocido", None
+            
+            min_dist = 1.0
+            identity = "Desconocido"
+            email = None
+            
+            for name, face_email, stored_embedding_json in known_faces:
+                try:
+                    stored_embedding_list = json.loads(stored_embedding_json)
+                    stored_embedding = np.array(stored_embedding_list)
+                    
+                    if stored_embedding.shape[0] != embedding.shape[0]:
+                        continue
+                    
+                    dist = cosine(embedding, stored_embedding)
+                    if dist < min_dist:
+                        min_dist = dist
+                        identity = name
+                        email = face_email
+                except Exception as e:
+                    continue
+            
+            threshold = 0.258
+            if min_dist < threshold:
+                return identity, email
+            else:
+                return "Desconocido", None
                 
+        except mysql.connector.Error as e:
+            print(f"Error en reconocimiento: {e}")
+            return "Error", None
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
+    @staticmethod
+    def get_user_data_from_email(email):
+        """Obtiene los datos del usuario desde la tabla usuarios_permitidos"""
+        conn = DatabaseManager.get_db_connection()
+        if conn is None:
+            return {"found": False}
+        
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, nombre, apellido, email 
+                FROM usuarios_permitidos 
+                WHERE email = %s AND activo = 1
+            """, (email,))
+            
+            user = cursor.fetchone()
+            
+            if user:
+                return {
+                    "id": user[0],
+                    "nombre": user[1],
+                    "apellido": user[2],
+                    "email": user[3],
+                    "found": True
+                }
+            else:
+                return {"found": False}
+        except mysql.connector.Error as e:
+            print(f"Error al buscar usuario: {e}")
+            return {"found": False}
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
+
+    @staticmethod
+    def register_attendance(nombre, apellido, email, metodo='facial'):
+        """Registra la entrada o salida en la tabla registros de MySQL"""
+        conn = DatabaseManager.get_db_connection()
+        if conn is None:
+            return {"success": False, "message": "Error de conexión a la base de datos"}
+        
+        try:
             cursor = conn.cursor()
             
-            # Verificar si existe la tabla estado_usuarios
-            cursor.execute("""
-                SELECT COUNT(*) as exists_table
-                FROM information_schema.TABLES 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'estado_usuarios'
-            """, (self.db_config['database'],))
+            now = datetime.now()
+            fecha = now.strftime("%Y-%m-%d")
+            hora = now.strftime("%H:%M:%S")
+            dia = now.strftime("%A")
             
-            estado_table_exists = cursor.fetchone()['exists_table'] > 0
-            
-            # Si no existe, crearla
-            if not estado_table_exists:
-                try:
-                    cursor.execute("""
-                        CREATE TABLE estado_usuarios (
-                            email VARCHAR(100) PRIMARY KEY,
-                            nombre VARCHAR(100),
-                            apellido VARCHAR(100),
-                            estado ENUM('dentro', 'fuera') DEFAULT 'fuera',
-                            ultima_entrada DATETIME NULL,
-                            ultima_salida DATETIME NULL,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                        )
-                    """)
-                    conn.commit()
-                    print("Tabla 'estado_usuarios' creada exitosamente")
-                    
-                    # Inicializar con usuarios activos
-                    cursor.execute("""
-                        INSERT INTO estado_usuarios (email, nombre, apellido, estado)
-                        SELECT email, nombre, apellido, 'fuera' 
-                        FROM usuarios_permitidos 
-                        WHERE activo = 1
-                    """)
-                    conn.commit()
-                    print("Tabla 'estado_usuarios' inicializada con usuarios activos")
-                    
-                except Exception as create_err:
-                    print(f"Error al crear tabla 'estado_usuarios': {str(create_err)}")
-                    conn.rollback()
-            
-            # Verificar columnas en tabla registros
-            cursor.execute("""
-                SELECT COUNT(*) as exists_column 
-                FROM information_schema.COLUMNS 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'registros' 
-                AND COLUMN_NAME = 'tipo'
-            """, (self.db_config['database'],))
-            
-            tipo_exists = cursor.fetchone()['exists_column'] > 0
-            
-            if not tipo_exists:
-                try:
-                    cursor.execute("""
-                        ALTER TABLE registros 
-                        ADD COLUMN tipo VARCHAR(20) DEFAULT 'Entrada'
-                    """)
-                    conn.commit()
-                    print("Columna 'tipo' agregada a la tabla registros")
-                except Exception as alter_err:
-                    print(f"No se pudo agregar la columna 'tipo': {str(alter_err)}")
-                    conn.rollback()
+            # Determinar tipo de registro
+            tipo = DatabaseManager.determinar_tipo_registro(email)
             
             cursor.execute("""
-                SELECT COUNT(*) as exists_column 
-                FROM information_schema.COLUMNS 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'registros' 
-                AND COLUMN_NAME = 'timestamp'
-            """, (self.db_config['database'],))
+                INSERT INTO registros (fecha, hora, dia, nombre, apellido, email, metodo, tipo)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (fecha, hora, dia, nombre, apellido, email, metodo, tipo))
             
-            timestamp_exists = cursor.fetchone()['exists_column'] > 0
+            conn.commit()
+            registro_id = cursor.lastrowid
             
-            if not timestamp_exists:
-                try:
-                    cursor.execute("""
-                        ALTER TABLE registros 
-                        ADD COLUMN timestamp DATETIME NULL
-                    """)
-                    conn.commit()
-                    print("Columna 'timestamp' agregada a la tabla registros")
-                except Exception as alter_err:
-                    print(f"No se pudo agregar la columna 'timestamp': {str(alter_err)}")
-                    conn.rollback()
-            
-            cursor.execute("""
-                SELECT COUNT(*) as exists_column 
-                FROM information_schema.COLUMNS 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'registros' 
-                AND COLUMN_NAME = 'auto_generado'
-            """, (self.db_config['database'],))
-            
-            auto_generado_exists = cursor.fetchone()['exists_column'] > 0
-            
-            if not auto_generado_exists:
-                try:
-                    cursor.execute("""
-                        ALTER TABLE registros 
-                        ADD COLUMN auto_generado BOOLEAN DEFAULT FALSE
-                    """)
-                    conn.commit()
-                    print("Columna 'auto_generado' agregada a la tabla registros")
-                except Exception as alter_err:
-                    print(f"No se pudo agregar la columna 'auto_generado': {str(alter_err)}")
-                    conn.rollback()
-            
-            conn.close()
-        except Exception as e:
-            print(f"Error al verificar tablas: {str(e)}")
-    
-    def actualizar_cache_periodicamente(self):
-        """Actualiza el cache de datos de la API periódicamente"""
-        while True:
-            try:
-                self.actualizar_cache_datos()
-                time.sleep(60)  # Actualizar cada minuto
-            except Exception as e:
-                print(f"Error actualizando cache: {str(e)}")
-                time.sleep(10)  # Reintentar después de 10 segundos si hay error
-    
-    def actualizar_cache_datos(self):
-        """Actualiza el cache con datos de la API"""
-        try:
-            # Obtener datos de cumplimiento
-            response = requests.get(f"{API_CONFIG['base_url']}/cumplimiento", 
-                                    verify=API_CONFIG['verify_ssl'])
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Guardar en cache datos de cada usuario
-                for user in data:
-                    email = user.get('email')
-                    if email:
-                        self.usuario_cache[email] = {
-                            'estado': user.get('estado'),
-                            'bloques': user.get('bloques', []),
-                            'bloques_info': user.get('bloques_info', []),
-                            'ultima_actualizacion': time.time()
-                        }
-            
-            # Obtener datos de ayudantes presentes
-            response = requests.get(f"{API_CONFIG['base_url']}/ayudantes_presentes", 
-                                    verify=API_CONFIG['verify_ssl'])
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                # Actualizar el estado "presente" en el cache
-                presentes = {user.get('email'): True for user in data}
-                
-                for email in self.usuario_cache:
-                    self.usuario_cache[email]['presente'] = presentes.get(email, False)
-            
-            # Actualizar timestamp del último cache
-            self.last_cache_update = time.time()
-            
-        except Exception as e:
-            print(f"Error al obtener datos de la API: {str(e)}")
-    
-    def get_db_connection(self):
-        """Establece y retorna una conexión a la base de datos MySQL"""
-        try:
-            conn = pymysql.connect(**self.db_config)
-            return conn
-        except Exception as e:
-            print(f"Error de conexión a MySQL: {str(e)}")
-            return None
-    
-    def get_api_data(self, endpoint, params=None):
-        """Obtiene datos de la API"""
-        try:
-            url = f"{API_CONFIG['base_url']}/{endpoint}"
-            response = requests.get(url, params=params, verify=API_CONFIG['verify_ssl'])
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"Error en API: {response.status_code} - {response.text}")
-                return None
-        except Exception as e:
-            print(f"Error conectando con API: {str(e)}")
-            return None
-    
-    def normalize_text(self, text):
-        """Normaliza el texto para comparaciones"""
-        if text is None:
-            return ""
+            return {
+                "success": True,
+                "message": f"Registro exitoso: {nombre} {apellido}",
+                "id": registro_id,
+                "fecha": fecha,
+                "hora": hora,
+                "tipo": tipo
+            }
+        except mysql.connector.Error as e:
+            print(f"Error al registrar asistencia: {e}")
+            return {
+                "success": False,
+                "message": f"Error: {str(e)}"
+            }
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
-        # Ensure we're working with unicode strings
-        if isinstance(text, bytes):
-            try:
-                text = text.decode('utf-8')
-            except UnicodeDecodeError:
-                try:
-                    text = text.decode('latin-1')
-                except UnicodeDecodeError:
-                    text = text.decode('utf-8', errors='ignore')
+    @staticmethod
+    def determinar_tipo_registro(email):
+        """Determina si el registro es de entrada o salida"""
+        conn = DatabaseManager.get_db_connection()
+        if conn is None:
+            return "Entrada"
+        
+        try:
+            cursor = conn.cursor()
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            cursor.execute("""
+                SELECT COUNT(*) FROM registros 
+                WHERE email = %s AND fecha = %s
+            """, (email, today))
+            
+            count = cursor.fetchone()[0]
+            return "Entrada" if count % 2 == 0 else "Salida"
+        except mysql.connector.Error as e:
+            print(f"Error determinando tipo de registro: {e}")
+            return "Entrada"
+        finally:
+            if conn.is_connected():
+                cursor.close()
+                conn.close()
 
-        # Clean up encoding artifacts without re-encoding
-        text = text.replace('ﾃｭ', 'í')
-        text = text.replace('ﾃｱ', 'ñ')
-        text = text.replace('ﾃ³', 'ó')
-        text = text.replace('ﾃ¡', 'á')
-        text = text.replace('ﾃ©', 'é')
-        text = text.replace('ﾃｺ', 'ú')
+class RegisterFacePopup(Popup):
+    """Popup para registrar nuevos rostros"""
+    def __init__(self, face_img, callback, **kwargs):
+        super(RegisterFacePopup, self).__init__(**kwargs)
+        self.face_img = face_img
+        self.callback = callback
+        
+        self.title = "Registrar Nuevo Rostro"
+        self.size_hint = (0.8, 0.6)
+        
+        content = BackgroundLayout(orientation='vertical', spacing=10, padding=10)
+        
+        content.add_widget(Label(
+            text="Ingrese el email del usuario:",
+            color=get_color_from_hex(COLORS['light_text']),
+            size_hint=(1, 0.2)
+        ))
+        
+        self.email_input = TextInput(
+            multiline=False,
+            size_hint=(1, 0.3),
+            hint_text="ejemplo@email.com"
+        )
+        content.add_widget(self.email_input)
+        
+        button_layout = BoxLayout(orientation='horizontal', size_hint=(1, 0.3), spacing=10)
+        
+        cancel_btn = Button(
+            text="Cancelar",
+            background_color=get_color_from_hex(COLORS['error'])
+        )
+        cancel_btn.bind(on_press=self.dismiss)
+        
+        register_btn = Button(
+            text="Registrar",
+            background_color=get_color_from_hex(COLORS['success'])
+        )
+        register_btn.bind(on_press=self.register_face)
+        
+        button_layout.add_widget(cancel_btn)
+        button_layout.add_widget(register_btn)
+        content.add_widget(button_layout)
+        
+        self.content = content
+    
+    def register_face(self, instance):
+        email = self.email_input.text.strip()
+        if email:
+            self.callback(email, self.face_img)
+            self.dismiss()
 
-        # Then proceed with normalization
-        text = text.lower()
+class UnifiedAccessSystem(BackgroundLayout):
+    def __init__(self, **kwargs):
+        super(UnifiedAccessSystem, self).__init__(bg_color=COLORS['dark_bg'], **kwargs)
+        self.orientation = 'vertical'
+        
+        # Modo actual: 'facial' o 'qr'
+        self.current_mode = 'facial'
+        
+        # Configuración de cámara
+        self.capture = cv2.VideoCapture(0)
+        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.capture.set(cv2.CAP_PROP_FPS, 15)
+        
+        # Estado del sistema
+        self.is_scanning = True
+        self.last_scan_time = 0
+        self.scan_cooldown = 2.0
+        self.api_busy = False
+        
+        # Variables para reconocimiento facial
+        self.analyzing = False
+        self.analysis_start_time = 0
+        self.analysis_duration = 3
+        self.analysis_frames = []
+        self.last_recognition_time = {}
+        self.cooldown_time = 5
+        
+        # Estado de acceso
+        self.access_status = None
+        self.access_display_start = 0
+        self.access_display_duration = 3
+        self.recognized_person = None
+        
+        # Verificar conexión API para modo QR
+        self.api_connected = self.check_api_connection()
+        
+        # Inicializar base de datos
+        if not DatabaseManager.init_faces_table():
+            print("Error: No se pudo inicializar la tabla de rostros")
+        
+        # Configurar interfaz
+        self.setup_ui()
+        
+        # Iniciar loop de cámara
+        Clock.schedule_interval(self.update_camera, 1.0 / 15.0)
+        
+        print("Sistema unificado iniciado en modo facial")
     
-        # Use unicodedata to remove accents but avoid re-encoding issues
-        normalized = ''
-        for c in unicodedata.normalize('NFD', text):
-            if unicodedata.category(c) != 'Mn':
-                normalized += c
-    
-        # Handle ñ specifically
-        normalized = normalized.replace('ñ', 'n')
-    
-        # Remove non-alphanumeric characters
-        normalized = ''.join(c for c in normalized if c.isalnum() or c.isspace())
-    
-        return normalized
+    def check_api_connection(self):
+        """Verificar conexión con la API para modo QR"""
+        try:
+            response = requests.get(
+                API_CONFIG['base_url'] + '/health', 
+                timeout=5,
+                verify=API_CONFIG['verify_ssl'],
+                headers=API_CONFIG['headers']
+            )
+            return response.status_code == 200
+        except:
+            return False
     
     def setup_ui(self):
-        # Título
-        title_box = BackgroundLayout(size_hint=(1, 0.1), bg_color=COLORS['primary'])
+        """Configurar interfaz de usuario"""
+        # Header con título y botón de modo
+        header = BackgroundLayout(
+            orientation='horizontal', 
+            size_hint=(1, 0.1), 
+            bg_color=COLORS['dark_bg']
+        )
+        
         self.title_label = Label(
-            text="Lector de QR - Control de Acceso", 
-            font_size='24sp',
+            text="RECONOCIMIENTO FACIAL - ACTIVO",
+            font_size='16sp',
             bold=True,
-            color=get_color_from_hex(COLORS['light_text'])
+            color=get_color_from_hex(COLORS['light_text']),
+            size_hint=(0.7, 1)
         )
-        title_box.add_widget(self.title_label)
-        self.add_widget(title_box)
+        header.add_widget(self.title_label)
         
-        # Vista de la cámara con marco
-        camera_container = BackgroundLayout(size_hint=(1, 0.7), bg_color=COLORS['dark_bg'])
-        camera_inner = BoxLayout(padding=10)
-        self.image = Image(size_hint=(1, 1))
-        camera_inner.add_widget(self.image)
-        camera_container.add_widget(camera_inner)
-        self.add_widget(camera_container)
-        
-        # Área de estado con degradado
-        status_box = BackgroundLayout(size_hint=(1, 0.1), bg_color=COLORS['dark_bg'], padding=[10, 5])
-        self.status_label = Label(
-            text="Escanea un código QR",
-            font_size='18sp',
-            bold=True,
-            color=get_color_from_hex(COLORS['light_text'])
-        )
-        status_box.add_widget(self.status_label)
-        self.add_widget(status_box)
-        
-        # Botones
-        button_box = BackgroundLayout(size_hint=(1, 0.1), bg_color=COLORS['dark_bg'], padding=[10, 5], spacing=10)
-        
-        self.toggle_button = Button(
-            text="Pausar",
-            background_color=get_color_from_hex(COLORS['button']),
+        self.mode_button = Button(
+            text="CAMBIAR A QR",
+            background_color=get_color_from_hex(COLORS['qr_mode']),
             color=get_color_from_hex(COLORS['light_text']),
             bold=True,
-            size_hint=(0.5, 1)
+            font_size='12sp',
+            size_hint=(0.3, 1)
         )
-        self.toggle_button.bind(on_press=self.toggle_scanning)
+        self.mode_button.bind(on_press=self.toggle_mode)
+        header.add_widget(self.mode_button)
         
-        self.quit_button = Button(
-            text="Salir",
+        self.add_widget(header)
+        
+        # Layout principal
+        main_layout = BoxLayout(orientation='horizontal', size_hint=(1, 0.8))
+        
+        # Panel izquierdo - Cámara
+        left_panel = BackgroundLayout(
+            orientation='vertical', 
+            size_hint=(0.7, 1), 
+            bg_color=COLORS['dark_bg']
+        )
+        
+        # Vista de cámara
+        self.camera_image = Image(size_hint=(1, 0.9))
+        left_panel.add_widget(self.camera_image)
+        
+        # Botones de cámara
+        camera_buttons = BoxLayout(
+            orientation='horizontal', 
+            size_hint=(1, 0.1), 
+            spacing=5
+        )
+        
+        self.scan_button = Button(
+            text="PAUSAR",
+            background_color=get_color_from_hex(COLORS['button']),
+            color=get_color_from_hex(COLORS['light_text']),
+            bold=True
+        )
+        self.scan_button.bind(on_press=self.toggle_scanning)
+        
+        self.register_button = Button(
+            text="REGISTRAR ROSTRO",
+            background_color=get_color_from_hex(COLORS['facial']),
+            color=get_color_from_hex(COLORS['light_text']),
+            bold=True
+        )
+        self.register_button.bind(on_press=self.register_face_from_camera)
+        
+        camera_buttons.add_widget(self.scan_button)
+        camera_buttons.add_widget(self.register_button)
+        left_panel.add_widget(camera_buttons)
+        
+        main_layout.add_widget(left_panel)
+        
+        # Panel derecho - Información
+        right_panel = BackgroundLayout(
+            orientation='vertical', 
+            size_hint=(0.3, 1),
+            bg_color=COLORS['dark_bg'], 
+            padding=[10, 5], 
+            spacing=5
+        )
+        
+        # Estado del sistema
+        self.status_label = Label(
+            text="Reconocimiento Facial Activo",
+            font_size='14sp',
+            bold=True,
+            color=get_color_from_hex(COLORS['success']),
+            size_hint=(1, 0.15),
+            text_size=(None, None),
+            halign='center'
+        )
+        right_panel.add_widget(self.status_label)
+        
+        # Modo actual
+        self.mode_label = Label(
+            text="MODO: FACIAL",
+            font_size='12sp',
+            bold=True,
+            color=get_color_from_hex(COLORS['facial']),
+            size_hint=(1, 0.1)
+        )
+        right_panel.add_widget(self.mode_label)
+        
+        # Tipo de usuario detectado
+        self.user_type_label = Label(
+            text="",
+            font_size='11sp',
+            bold=True,
+            color=get_color_from_hex(COLORS['accent']),
+            size_hint=(1, 0.1)
+        )
+        right_panel.add_widget(self.user_type_label)
+        
+        # Información detallada
+        self.info_label = Label(
+            text="Listo para reconocer rostros\n\nApunte la cámara hacia su rostro\npara registrar asistencia",
+            font_size='10sp',
+            color=get_color_from_hex(COLORS['light_text']),
+            size_hint=(1, 0.45),
+            text_size=(None, None),
+            halign='left',
+            valign='top'
+        )
+        right_panel.add_widget(self.info_label)
+        
+        # Estado de conexión (para modo QR)
+        api_status_text = "API QR: " + ("OK" if self.api_connected else "ERROR")
+        api_color = COLORS['success'] if self.api_connected else COLORS['error']
+        
+        self.api_status_label = Label(
+            text=api_status_text,
+            font_size='9sp',
+            color=get_color_from_hex(api_color),
+            size_hint=(1, 0.1)
+        )
+        right_panel.add_widget(self.api_status_label)
+        
+        # Botón de salir
+        quit_button = Button(
+            text="SALIR",
             background_color=get_color_from_hex(COLORS['error']),
             color=get_color_from_hex(COLORS['light_text']),
             bold=True,
-            size_hint=(0.5, 1)
+            size_hint=(1, 0.1)
         )
-        self.quit_button.bind(on_press=self.quit_app)
+        quit_button.bind(on_press=self.quit_app)
+        right_panel.add_widget(quit_button)
         
-        button_box.add_widget(self.toggle_button)
-        button_box.add_widget(self.quit_button)
-        self.add_widget(button_box)
+        main_layout.add_widget(right_panel)
+        self.add_widget(main_layout)
     
-    def update(self, dt):
-        # Capturar frame de la cámara
+    def toggle_mode(self, instance):
+        """Alternar entre modo facial y QR"""
+        if self.current_mode == 'facial':
+            self.current_mode = 'qr'
+            self.title_label.text = "LECTOR QR - ACTIVO"
+            self.mode_button.text = "CAMBIAR A FACIAL"
+            self.mode_button.background_color = get_color_from_hex(COLORS['facial'])
+            self.mode_label.text = "MODO: QR"
+            self.mode_label.color = get_color_from_hex(COLORS['qr_mode'])
+            self.register_button.disabled = True
+            self.register_button.text = "MODO QR"
+            
+            if self.api_connected:
+                self.status_label.text = "Lector QR Activo"
+                self.info_label.text = "Listo para escanear códigos QR\n\nApunte la cámara hacia un\ncódigo QR válido"
+            else:
+                self.status_label.text = "API No Disponible"
+                self.status_label.color = get_color_from_hex(COLORS['error'])
+                self.info_label.text = "No hay conexión con la API\n\nEl modo QR requiere\nconexión a internet"
+        else:
+            self.current_mode = 'facial'
+            self.title_label.text = "RECONOCIMIENTO FACIAL - ACTIVO"
+            self.mode_button.text = "CAMBIAR A QR"
+            self.mode_button.background_color = get_color_from_hex(COLORS['qr_mode'])
+            self.mode_label.text = "MODO: FACIAL"
+            self.mode_label.color = get_color_from_hex(COLORS['facial'])
+            self.register_button.disabled = False
+            self.register_button.text = "REGISTRAR ROSTRO"
+            
+            self.status_label.text = "Reconocimiento Facial Activo"
+            self.status_label.color = get_color_from_hex(COLORS['success'])
+            self.info_label.text = "Listo para reconocer rostros\n\nApunte la cámara hacia su rostro\npara registrar asistencia"
+        
+        # Resetear estados
+        self.analyzing = False
+        self.access_status = None
+        self.recognized_person = None
+        
+        print(f"Modo cambiado a: {self.current_mode}")
+    
+    def update_camera(self, dt):
+        """Actualizar frame de cámara y procesar según el modo"""
         ret, frame = self.capture.read()
         
         if ret:
-            # Voltear horizontalmente para una vista de espejo
-            frame = cv2.flip(frame, 1)
+            frame = cv2.flip(frame, 1)  # Espejo horizontal
+            display_frame = frame.copy()
             
-            # Procesar para encontrar códigos QR si el escáner está activo
-            if self.is_scanning:
-                # Convertir a escala de grises para mejor detección
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                qr_codes = decode(gray)
+            current_time = time.time()
+            
+            # Mostrar resultado de acceso si está activo
+            if self.access_status is not None and current_time - self.access_display_start < self.access_display_duration:
+                self.draw_access_result(display_frame, current_time)
+            elif current_time - self.access_display_start >= self.access_display_duration:
+                self.access_status = None
+                self.recognized_person = None
+            
+            if self.is_scanning and not self.api_busy:
+                if self.current_mode == 'facial':
+                    self.process_facial_recognition(frame, display_frame, current_time)
+                elif self.current_mode == 'qr' and self.api_connected:
+                    self.process_qr_detection(frame, display_frame, current_time)
+            
+            # Convertir frame para Kivy
+            self.update_camera_display(display_frame)
+    
+    def process_facial_recognition(self, frame, display_frame, current_time):
+        """Procesar reconocimiento facial"""
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = face_detection.process(rgb_frame)
+        
+        if results.detections:
+            for detection in results.detections:
+                bboxC = detection.location_data.relative_bounding_box
+                ih, iw, _ = frame.shape
+                x, y, w, h = int(bboxC.xmin * iw), int(bboxC.ymin * ih), int(bboxC.width * iw), int(bboxC.height * ih)
                 
-                current_time = time.time()
+                # Dibujar rectángulo
+                cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
                 
-                for qr in qr_codes:
-                    # Dibujar rectángulo alrededor del QR
-                    points = qr.polygon
-                    if points:
-                        pts = []
-                        for point in points:
-                            pts.append([point.x, point.y])
-                        
-                        import numpy as np
-                        pts = np.array(pts, np.int32)
-                        pts = pts.reshape((-1, 1, 2))
-                        cv2.polylines(frame, [pts], True, (0, 255, 0), 3)
+                # Manejo del análisis
+                if not self.analyzing and self.access_status is None:
+                    self.analyzing = True
+                    self.analysis_start_time = current_time
+                    self.analysis_frames = []
+                    cv2.putText(display_frame, "Analizando...", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                
+                elif self.analyzing:
+                    face_img = frame[y:y+h, x:x+w]
+                    if face_img.size > 0:
+                        self.analysis_frames.append(face_img)
                     
-                    # Procesar datos del QR si ha pasado suficiente tiempo desde el último escaneo
-                    if current_time - self.last_scan_time > self.scan_cooldown:
-                        data = qr.data.decode('utf-8')
-                        self.verificar_usuario(data)
-                        self.last_scan_time = current_time
-            
-            # Convertir para mostrar en Kivy
-            buf = cv2.flip(frame, 0).tobytes()
-            texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
-            texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
-            self.image.texture = texture
+                    progress = min(int((current_time - self.analysis_start_time) / self.analysis_duration * 100), 100)
+                    cv2.putText(display_frame, f"Analizando: {progress}%", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    
+                    if current_time - self.analysis_start_time >= self.analysis_duration and len(self.analysis_frames) > 0:
+                        self.analyzing = False
+                        self.process_facial_analysis(current_time)
+        else:
+            if self.analyzing:
+                self.analyzing = False
     
-    def verificar_usuario(self, data):
-        try:
-            # Add logging for raw data
-            print(f"Raw QR data: {data}")
-    
+    def process_facial_analysis(self, current_time):
+        """Procesar análisis facial en hilo separado"""
+        def analyze_thread():
             try:
-                # Try to decode with utf-8 first
-                user_data = json.loads(data)
-            
-                # Log the parsed data
-                print(f"Parsed QR data: {user_data}")
-            
-                # Clean up the string values to handle encoding issues
-                for key in ['name', 'surname', 'email']:
-                    if key in user_data:
-                        # Clean up potential encoding issues
-                        try:
-                            cleaned_value = user_data[key].encode('utf-8').decode('utf-8')
-                        except (UnicodeEncodeError, UnicodeDecodeError):
-                                cleaned_value = user_data[key].encode('utf-8', errors='replace').decode('utf-8', errors='replace')
-
-                        user_data[key] = cleaned_value.strip()
-            
-                # Log the cleaned data
-                print(f"Cleaned QR data: {user_data}")
-            
-                # Verify if QR is expired
-                if user_data.get('expired') == True or user_data.get('status') == "EXPIRED":
-                    self.mostrar_resultado(False, "QR expirado", "El código QR ha expirado")
-                    return
-            
-                # If we get here, verify the data with the database
-                self.status_label.text = "Verificando usuario..."
-            
-                # Extract user data
-                nombre = user_data.get('name', '')
-                apellido = user_data.get('surname', '')
-                email = user_data.get('email', '')
-            
-                # Log the extracted data before normalization
-                print(f"Before normalization - Nombre: {nombre}, Apellido: {apellido}, Email: {email}")
-            
-                # Verify user in database
-                resultado = self.verificar_usuario_db(nombre, apellido, email)
-            
-                # Show result
-                if resultado["success"]:
-                    tipo_registro = resultado.get("tipo", "Registro")
-                    self.mostrar_resultado(True, f"{tipo_registro} registrado", resultado["message"])
+                best_face = self.analysis_frames[-1]
+                embedding = DatabaseManager.get_face_embedding(best_face)
+                
+                if embedding is not None:
+                    identity, email = DatabaseManager.recognize_face(embedding)
+                    
+                    if identity != "Desconocido" and identity != "Error" and email:
+                        if email in self.last_recognition_time and current_time - self.last_recognition_time[email] < self.cooldown_time:
+                            return
+                        
+                        user_data = DatabaseManager.get_user_data_from_email(email)
+                        
+                        if user_data["found"]:
+                            registro = DatabaseManager.register_attendance(
+                                user_data["nombre"], 
+                                user_data["apellido"], 
+                                user_data["email"],
+                                'facial'
+                            )
+                            
+                            Clock.schedule_once(lambda dt: self.show_access_result(registro, identity, current_time), 0)
+                            self.last_recognition_time[email] = current_time
+                        else:
+                            Clock.schedule_once(lambda dt: self.show_access_result({
+                                "success": False,
+                                "message": f"Usuario no encontrado: {identity}"
+                            }, identity, current_time), 0)
+                    else:
+                        Clock.schedule_once(lambda dt: self.show_access_result({
+                            "success": False,
+                            "message": "Persona no reconocida"
+                        }, None, current_time), 0)
                 else:
-                    self.mostrar_resultado(False, "Error", resultado["error"])
+                    Clock.schedule_once(lambda dt: self.show_access_result({
+                        "success": False,
+                        "message": "Error al analizar rostro"
+                    }, None, current_time), 0)
+            except Exception as e:
+                print(f"Error en análisis facial: {e}")
+        
+        thread = threading.Thread(target=analyze_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def process_qr_detection(self, frame, display_frame, current_time):
+        """Procesar detección de QR"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        qr_codes = decode(gray)
+        
+        for qr in qr_codes:
+            # Dibujar contorno del QR
+            points = qr.polygon
+            if points:
+                pts = []
+                for point in points:
+                    pts.append([point.x, point.y])
+                
+                pts = np.array(pts, np.int32)
+                pts = pts.reshape((-1, 1, 2))
+                cv2.polylines(display_frame, [pts], True, (0, 255, 0), 2)
             
+            # Procesar QR si ha pasado el cooldown
+            if current_time - self.last_scan_time > self.scan_cooldown:
+                qr_data = qr.data.decode('utf-8')
+                self.process_qr_async(qr_data, current_time)
+                self.last_scan_time = current_time
+    
+    def process_qr_async(self, qr_data, scan_time):
+        """Procesar QR en hilo separado"""
+        if self.api_busy:
+            return
+        
+        def process_thread():
+            self.api_busy = True
+            try:
+                self.process_qr(qr_data, scan_time)
+            finally:
+                self.api_busy = False
+        
+        thread = threading.Thread(target=process_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def process_qr(self, qr_data, scan_time):
+        """Enviar QR a la API para procesamiento"""
+        try:
+            print(f"QR detectado: {qr_data[:50]}...")
+            
+            # Actualizar UI
+            Clock.schedule_once(lambda dt: self.update_status("Enviando..."), 0)
+            
+            if not self.api_connected:
+                Clock.schedule_once(
+                    lambda dt: self.show_access_result({
+                        "success": False,
+                        "message": "Sin conexión API"
+                    }, None, scan_time), 0
+                )
+                return
+            
+            # Parsear QR data
+            try:
+                if isinstance(qr_data, str):
+                    parsed_data = json.loads(qr_data)
+                else:
+                    parsed_data = qr_data
             except json.JSONDecodeError:
-                # If QR contains "Expirado" as plain text
-                if "Expirado" in data:
-                    self.mostrar_resultado(False, "QR expirado", "El código QR ha expirado")
+                Clock.schedule_once(
+                    lambda dt: self.show_access_result({
+                        "success": False,
+                        "message": "Formato QR inválido"
+                    }, None, scan_time), 0
+                )
+                return
+            
+            # Enviar a API
+            response = requests.post(
+                API_CONFIG['base_url'] + '/validate-qr',
+                json=parsed_data,
+                timeout=API_CONFIG['timeout'],
+                verify=API_CONFIG['verify_ssl'],
+                headers=API_CONFIG['headers']
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if result['success']:
+                    # Construir resultado exitoso
+                    nombre = result.get('nombre', '')
+                    apellido = result.get('apellido', '')
+                    tipo = result.get('tipo', 'Registro')
+                    usuario_tipo = result.get('usuario_tipo', '')
+                    message = result.get('message', 'Registro exitoso')
+                    
+                    access_result = {
+                        "success": True,
+                        "message": f"{nombre} {apellido}",
+                        "tipo": tipo,
+                        "usuario_tipo": usuario_tipo
+                    }
+                    
+                    Clock.schedule_once(
+                        lambda dt: self.show_access_result(access_result, f"{nombre} {apellido}", scan_time), 0
+                    )
                 else:
-                    self.mostrar_resultado(False, "Formato inválido", "El QR no tiene un formato JSON válido")
-    
-        except Exception as e:
-            print(f"Error processing QR: {str(e)}")
-            self.mostrar_resultado(False, "Error", f"Error al procesar el QR: {str(e)}")
-    
-    def verificar_usuario_db(self, nombre: str, apellido: str, email: str):
-    
-        conn = self.get_db_connection()
-        if not conn:
-            return {"success": False, "error": "No se pudo conectar a la base de datos"}
-    
-        try:
-            cursor = conn.cursor()
-    
-            # 1) Buscar usuario activo por email
-            cursor.execute(
-                "SELECT id, nombre, apellido, email "
-                "FROM usuarios_permitidos "
-                "WHERE activo = 1 AND LOWER(email) = %s",
-                (email.lower(),)
-            )
-            user = cursor.fetchone()
-            if not user:
-                return {"success": False, "error": "Usuario no permitido"}
-    
-            db_email    = user["email"]
-            db_nombre   = user["nombre"]
-            db_apellido = user["apellido"]
-    
-            # 2) Alternar estado en estado_usuarios
-            cursor.execute(
-                "SELECT estado FROM estado_usuarios WHERE email = %s",
-                (db_email,)
-            )
-            fila = cursor.fetchone()
-            if fila and fila["estado"] == "dentro":
-                tipo, nuevo_estado = "Salida", "fuera"
-                cursor.execute(
-                    "UPDATE estado_usuarios "
-                    "SET estado = %s, ultima_salida = NOW() "
-                    "WHERE email = %s",
-                    (nuevo_estado, db_email)
-                )
+                    # Error desde API
+                    error_msg = result.get('error', 'Error desconocido')
+                    Clock.schedule_once(
+                        lambda dt: self.show_access_result({
+                            "success": False,
+                            "message": error_msg
+                        }, None, scan_time), 0
+                    )
             else:
-                tipo, nuevo_estado = "Entrada", "dentro"
-                cursor.execute(
-                    "INSERT INTO estado_usuarios (email, nombre, apellido, estado, ultima_entrada) "
-                    "VALUES (%s, %s, %s, %s, NOW()) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "estado = VALUES(estado), ultima_entrada = NOW()",
-                    (db_email, db_nombre, db_apellido, nuevo_estado)
+                # Error HTTP
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', f'Error HTTP {response.status_code}')
+                except:
+                    error_msg = f'Error HTTP {response.status_code}'
+                
+                Clock.schedule_once(
+                    lambda dt: self.show_access_result({
+                        "success": False,
+                        "message": error_msg
+                    }, None, scan_time), 0
                 )
-    
-            # 3) Insertar en registros OMITIENDO la columna 'timestamp'
-            now   = datetime.now()
-            fecha = now.strftime("%Y-%m-%d")
-            hora  = now.strftime("%H:%M:%S")
-    
-            # mapa inglés→español para el día
-            dias = {
-                'Monday':    'lunes', 'Tuesday':  'martes',
-                'Wednesday': 'miércoles', 'Thursday': 'jueves',
-                'Friday':    'viernes', 'Saturday': 'sábado',
-                'Sunday':    'domingo'
-            }
-            dia_ing = now.strftime("%A")
-            dia_esp = dias.get(dia_ing, dia_ing)
-    
-            cursor.execute(
-                "INSERT INTO registros "
-                "(fecha, hora, dia, nombre, apellido, email, tipo) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (fecha, hora, dia_esp, db_nombre, db_apellido, db_email, tipo)
+        
+        except requests.exceptions.ConnectionError:
+            self.api_connected = False
+            Clock.schedule_once(
+                lambda dt: [
+                    self.show_access_result({
+                        "success": False,
+                        "message": "Error de conexión"
+                    }, None, scan_time),
+                    self.update_api_status()
+                ], 0
+            )
+        except requests.exceptions.Timeout:
+            Clock.schedule_once(
+                lambda dt: self.show_access_result({
+                    "success": False,
+                    "message": "Tiempo agotado"
+                }, None, scan_time), 0
+            )
+        except Exception as e:
+            Clock.schedule_once(
+                lambda dt: self.show_access_result({
+                    "success": False,
+                    "message": f"Error: {str(e)[:20]}"
+                }, None, scan_time), 0
             )
     
-            conn.commit()
-    
-            # 4) Verificar horario y armar mensaje
-            horario_ok, msg = self.verificar_horario(db_email, dia_esp, hora)
-            mensaje = (
-                f"{db_nombre} {db_apellido}\n"
-                f"Fecha: {fecha} | Hora: {hora}\n"
-                + ("✓ " if horario_ok else "⚠ ") + msg
-            )
-    
-            return {"success": True, "message": mensaje, "tipo": tipo}
-    
-        except Exception as e:
-            conn.rollback()
-            return {"success": False, "error": f"Error BD: {e}"}
-    
-        finally:
-            conn.close()
-
-    
-    def verificar_horario(self, email, dia_semana, hora_actual):
-        conn = None
-        try:
-            conn = self.get_db_connection()
-            if not conn:
-                return False, "No se pudo conectar a la base de datos"
-                
-            cursor = conn.cursor()
-            
-            # Buscar los bloques de horario para este usuario en este día
-            cursor.execute("""
-                SELECT h.hora_entrada, h.hora_salida 
-                FROM horarios_asignados h
-                JOIN usuarios_permitidos u ON h.usuario_id = u.id
-                WHERE u.email = %s AND LOWER(h.dia) = %s
-                ORDER BY h.hora_entrada
-            """, (email, dia_semana.lower()))
-            
-            bloques = cursor.fetchall()
-            
-            if not bloques:
-                if conn:
-                    conn.close()
-                return False, "No tiene horario asignado para hoy"
-            
-            # Convertir hora actual a objeto datetime para comparar
-            hora_dt = datetime.strptime(hora_actual, "%H:%M:%S").time()
-            
-            # Verificar si la hora actual está dentro de algún bloque
-            for bloque in bloques:
-                hora_entrada = datetime.strptime(bloque['hora_entrada'], "%H:%M:%S").time()
-                hora_salida = datetime.strptime(bloque['hora_salida'], "%H:%M:%S").time()
-                
-                if hora_entrada <= hora_dt <= hora_salida:
-                    if conn:
-                        conn.close()
-                    return True, f"Dentro del horario ({bloque['hora_entrada']} - {bloque['hora_salida']})"
-            
-            # Si llegamos aquí, no está en ningún bloque
-            # Encontrar el bloque más cercano
-            bloques_dt = [(datetime.strptime(bloque['hora_entrada'], "%H:%M:%S").time(), 
-                           datetime.strptime(bloque['hora_salida'], "%H:%M:%S").time()) for bloque in bloques]
-            
-            # Ordenar por proximidad
-            bloques_dt.sort(key=lambda b: 
-                abs((datetime.combine(datetime.today(), hora_dt) - 
-                     datetime.combine(datetime.today(), b[0])).total_seconds()))
-            
-            proximo = bloques_dt[0]
-            if conn:
-                conn.close()
-            return False, f"Fuera de horario. Bloque más cercano: {proximo[0].strftime('%H:%M:%S')} - {proximo[1].strftime('%H:%M:%S')}"
-            
-        except Exception as e:
-            print(f"Error verificando horario: {str(e)}")
-            if conn:
-                conn.close()
-            return False, f"Error al verificar horario: {str(e)}"
-    
-    def mostrar_resultado(self, success, title, message):
-        # Crear una vista modal para mostrar el resultado
-        modal = ModalView(size_hint=(0.8, 0.4), auto_dismiss=True)
-        content = BackgroundLayout(orientation='vertical', padding=20, spacing=10, 
-                                 bg_color=COLORS['entry'] if title.startswith("Entrada") else 
-                                          COLORS['exit'] if title.startswith("Salida") else
-                                          COLORS['success'] if success else COLORS['error'])
+    def draw_access_result(self, display_frame, current_time):
+        """Dibujar resultado de acceso en el frame"""
+        overlay = display_frame.copy()
         
-        # Icono de éxito o error
-        icon_text = "➡️" if title.startswith("Entrada") else "⬅️" if title.startswith("Salida") else "✓" if success else "✗"
-        icon_label = Label(
-            text=icon_text,
-            font_size='40sp',
-            bold=True,
-            color=get_color_from_hex(COLORS['light_text']),
-            size_hint=(1, 0.2)
-        )
-        
-        # Título
-        title_label = Label(
-            text=title,
-            font_size='22sp',
-            bold=True,
-            color=get_color_from_hex(COLORS['light_text']),
-            size_hint=(1, 0.3)
-        )
-        
-        # Mensaje
-        msg_label = Label(
-            text=message,
-            font_size='18sp',
-            color=get_color_from_hex(COLORS['light_text']),
-            size_hint=(1, 0.5),
-            halign='center'
-        )
-        msg_label.bind(size=msg_label.setter('text_size'))
-        
-        # Añadir widgets al layout
-        content.add_widget(icon_label)
-        content.add_widget(title_label)
-        content.add_widget(msg_label)
-        
-        # Configurar color de fondo según resultado
-        if title.startswith("Entrada"):
-            entry_color = get_color_from_hex(COLORS['entry'])
-            modal.background_color = [entry_color[0], entry_color[1], entry_color[2], 0.95]
-        elif title.startswith("Salida"):
-            exit_color = get_color_from_hex(COLORS['exit'])
-            modal.background_color = [exit_color[0], exit_color[1], exit_color[2], 0.95]
-        elif success:
-            success_color = get_color_from_hex(COLORS['success'])
-            modal.background_color = [success_color[0], success_color[1], success_color[2], 0.95]
+        if self.access_status["success"]:
+            if self.current_mode == 'facial':
+                text = f"{self.access_status['message']} - {self.access_status.get('tipo', '')}"
+                color = (0, 255, 0)  # Verde
+            else:  # modo QR
+                text = f"{self.access_status['message']} - {self.access_status.get('tipo', '')}"
+                color = (0, 255, 0)  # Verde
         else:
-            error_color = get_color_from_hex(COLORS['error'])
-            modal.background_color = [error_color[0], error_color[1], error_color[2], 0.95]
+            text = f"ERROR: {self.access_status['message']}"
+            color = (0, 0, 255)  # Rojo
         
-        # Mostrar el modal
-        modal.add_widget(content)
-        modal.open()
+        # Dibujar texto con fondo
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        thickness = 2
         
-        # Programar cierre automático después de 5 segundos
-        Clock.schedule_once(lambda dt: modal.dismiss(), 5)
+        # Obtener tamaño del texto
+        (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
         
-        # Cambiar el texto del status
-        if success:
-            self.status_label.text = f"¡{title}!"
-            if title.startswith("Entrada"):
-                self.status_label.color = get_color_from_hex(COLORS['entry'])
-            elif title.startswith("Salida"):
-                self.status_label.color = get_color_from_hex(COLORS['exit'])
-            else:
-                self.status_label.color = get_color_from_hex(COLORS['success'])
+        # Posición centrada
+        x = (display_frame.shape[1] - text_width) // 2
+        y = 60
+        
+        # Dibujar fondo
+        cv2.rectangle(overlay, (x-10, y-text_height-10), (x+text_width+10, y+baseline+10), (0, 0, 0), -1)
+        
+        # Dibujar texto
+        cv2.putText(overlay, text, (x, y), font, font_scale, color, thickness)
+        
+        # Aplicar overlay con transparencia
+        alpha = 0.8
+        cv2.addWeighted(overlay, alpha, display_frame, 1 - alpha, 0, display_frame)
+    
+    def update_camera_display(self, frame):
+        """Actualizar display de la cámara"""
+        buf = cv2.flip(frame, 0).tobytes()
+        texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
+        texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+        self.camera_image.texture = texture
+    
+    def show_access_result(self, result, person_name, scan_time):
+        """Mostrar resultado de acceso en la UI"""
+        self.access_status = result
+        self.access_display_start = scan_time
+        self.recognized_person = person_name
+        
+        # Actualizar labels de estado
+        if result["success"]:
+            if self.current_mode == 'facial':
+                status_text = f"{result.get('tipo', 'Registro')} Registrado"
+                color = COLORS['entry'] if result.get('tipo') == 'Entrada' else COLORS['exit']
+            else:  # modo QR
+                status_text = f"{result.get('tipo', 'Registro')} QR"
+                color = COLORS['entry'] if result.get('tipo') == 'Entrada' else COLORS['exit']
+            
+            self.status_label.text = status_text
+            self.status_label.color = get_color_from_hex(color)
+            
+            # Tipo de usuario
+            user_type = result.get('usuario_tipo', '')
+            if user_type:
+                type_color = COLORS['student'] if user_type == "ESTUDIANTE" else COLORS['helper']
+                self.user_type_label.text = user_type
+                self.user_type_label.color = get_color_from_hex(type_color)
+            
+            # Información detallada
+            self.info_label.text = f"✓ {result['message']}\n\nTipo: {result.get('tipo', '')}\nMétodo: {self.current_mode.upper()}"
+            
+            print(f"ACCESO REGISTRADO: {status_text} - {result['message']}")
         else:
-            self.status_label.text = f"Error: {title}"
+            self.status_label.text = "ERROR"
             self.status_label.color = get_color_from_hex(COLORS['error'])
+            self.user_type_label.text = ""
+            self.info_label.text = f"✗ {result['message']}\n\nIntente nuevamente\no contacte soporte"
+            
+            print(f"ERROR DE REGISTRO: {result['message']}")
         
-        # Restaurar color después de un tiempo
-        Clock.schedule_once(self.reset_status_color, 6)  # 6 segundos para que el mensaje se vea después del cierre del modal
+        # Programar reset
+        Clock.schedule_once(self.reset_status, self.access_display_duration)
     
-    def reset_status_color(self, dt):
-        self.status_label.text = "Escanea un código QR"
-        self.status_label.color = get_color_from_hex(COLORS['light_text'])
+    def reset_status(self, dt):
+        """Restaurar estado inicial de la UI"""
+        if self.current_mode == 'facial':
+            self.status_label.text = "Reconocimiento Facial Activo" if self.is_scanning else "Pausado"
+            self.info_label.text = "Listo para reconocer rostros\n\nApunte la cámara hacia su rostro\npara registrar asistencia"
+        else:  # modo QR
+            if self.api_connected:
+                self.status_label.text = "Lector QR Activo" if self.is_scanning else "Pausado"
+                self.info_label.text = "Listo para escanear códigos QR\n\nApunte la cámara hacia un\ncódigo QR válido"
+            else:
+                self.status_label.text = "API No Disponible"
+                self.info_label.text = "No hay conexión con la API\n\nEl modo QR requiere\nconexión a internet"
+        
+        self.status_label.color = get_color_from_hex(COLORS['success'])
+        self.user_type_label.text = ""
+    
+    def update_status(self, status_text):
+        """Actualizar estado en UI"""
+        self.status_label.text = status_text
+        self.status_label.color = get_color_from_hex(COLORS['warning'])
+    
+    def update_api_status(self):
+        """Actualizar estado de conexión API"""
+        api_status_text = "API QR: " + ("OK" if self.api_connected else "ERROR")
+        api_color = COLORS['success'] if self.api_connected else COLORS['error']
+        self.api_status_label.text = api_status_text
+        self.api_status_label.color = get_color_from_hex(api_color)
     
     def toggle_scanning(self, instance):
+        """Alternar escaneo/pausa"""
         self.is_scanning = not self.is_scanning
+        
         if self.is_scanning:
-            self.toggle_button.text = "Pausar"
-            self.toggle_button.background_color = get_color_from_hex(COLORS['button'])
-            self.status_label.text = "Escanea un código QR"
+            self.scan_button.text = "PAUSAR"
+            self.scan_button.background_color = get_color_from_hex(COLORS['button'])
+            
+            if self.current_mode == 'facial':
+                self.status_label.text = "Reconocimiento Facial Activo"
+            else:
+                self.status_label.text = "Lector QR Activo" if self.api_connected else "API No Disponible"
         else:
-            self.toggle_button.text = "Reanudar"
-            self.toggle_button.background_color = get_color_from_hex(COLORS['accent'])
-            self.status_label.text = "Escáner en pausa"
+            self.scan_button.text = "REANUDAR"
+            self.scan_button.background_color = get_color_from_hex(COLORS['accent'])
+            self.status_label.text = "Pausado"
+            self.status_label.color = get_color_from_hex(COLORS['warning'])
+        
+        # Resetear estados
+        self.analyzing = False
+        self.access_status = None
+    
+    def register_face_from_camera(self, instance):
+        """Registrar rostro desde la cámara actual"""
+        if self.current_mode != 'facial':
+            return
+        
+        ret, frame = self.capture.read()
+        if ret:
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_detection.process(rgb_frame)
+            
+            if results.detections:
+                detection = results.detections[0]
+                bboxC = detection.location_data.relative_bounding_box
+                h, w, _ = frame.shape
+                x, y, fw, fh = int(bboxC.xmin * w), int(bboxC.ymin * h), int(bboxC.width * w), int(bboxC.height * h)
+                face_img = frame[y:y+fh, x:x+fw]
+                
+                if face_img.size > 0:
+                    popup = RegisterFacePopup(face_img, self.register_face_callback)
+                    popup.open()
+                else:
+                    self.show_message("Error", "No se pudo extraer la imagen facial")
+            else:
+                self.show_message("Error", "No se detectó ningún rostro en la imagen")
+    
+    def register_face_callback(self, email, face_img):
+        """Callback para registrar rostro"""
+        def register_thread():
+            try:
+                # Verificar usuario en base de datos
+                user_data = DatabaseManager.get_user_data_from_email(email)
+                
+                if user_data["found"]:
+                    # Obtener embedding
+                    embedding = DatabaseManager.get_face_embedding(face_img)
+                    
+                    if embedding is not None:
+                        # Guardar rostro
+                        nombre_completo = f"{user_data['nombre']} {user_data['apellido']}"
+                        
+                        if DatabaseManager.save_face(nombre_completo, email, embedding):
+                            Clock.schedule_once(
+                                lambda dt: self.show_message(
+                                    "Éxito", 
+                                    f"Rostro de {nombre_completo} registrado correctamente"
+                                ), 0
+                            )
+                        else:
+                            Clock.schedule_once(
+                                lambda dt: self.show_message("Error", "No se pudo guardar el rostro"), 0
+                            )
+                    else:
+                        Clock.schedule_once(
+                            lambda dt: self.show_message("Error", "No se pudo procesar el rostro"), 0
+                        )
+                else:
+                    Clock.schedule_once(
+                        lambda dt: self.show_message(
+                            "Error", 
+                            "Usuario no encontrado. Debe estar registrado previamente en el sistema"
+                        ), 0
+                    )
+            except Exception as e:
+                Clock.schedule_once(
+                    lambda dt: self.show_message("Error", f"Error inesperado: {str(e)}"), 0
+                )
+        
+        thread = threading.Thread(target=register_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def show_message(self, title, message):
+        """Mostrar mensaje popup"""
+        content = BackgroundLayout(orientation='vertical', padding=10)
+        
+        content.add_widget(Label(
+            text=message,
+            color=get_color_from_hex(COLORS['light_text']),
+            text_size=(300, None),
+            halign='center'
+        ))
+        
+        close_btn = Button(
+            text="Cerrar",
+            size_hint=(1, 0.3),
+            background_color=get_color_from_hex(COLORS['button'])
+        )
+        content.add_widget(close_btn)
+        
+        popup = Popup(
+            title=title,
+            content=content,
+            size_hint=(0.6, 0.4)
+        )
+        
+        close_btn.bind(on_press=popup.dismiss)
+        popup.open()
     
     def quit_app(self, instance):
-       # Liberar la cámara
-       self.capture.release()
-       # Desactivar cualquier Clock Schedule
-       Clock.unschedule(self.update)
-       Clock.unschedule(self.reset_status_color)
-       # Salir de la aplicación
-       App.get_running_app().stop()
-       # Para evitar el error al cerrar, forzamos la salida
-       sys.exit(0)
+        """Cerrar aplicación"""
+        print("Cerrando sistema unificado...")
+        if self.capture:
+            self.capture.release()
+        
+        Clock.unschedule(self.update_camera)
+        Clock.unschedule(self.reset_status)
+        App.get_running_app().stop()
+        sys.exit(0)
 
-class LectorQRApp(App):
-   def build(self):
-       # Configurar los colores de la ventana
-       Window.clearcolor = get_color_from_hex(COLORS['dark_bg'])
-       return LectorQR()
+class UnifiedAccessApp(App):
+    def build(self):
+        Window.clearcolor = get_color_from_hex(COLORS['dark_bg'])
+        return UnifiedAccessSystem()
 
 if __name__ == '__main__':
-   try:
-       LectorQRApp().run()
-   except Exception as e:
-       print(f"Error en la aplicación: {str(e)}")
-       # Para asegurar que la app se cierre completamente
-       sys.exit(0)
+    try:
+        print("=== SISTEMA UNIFICADO DE CONTROL DE ACCESO ===")
+        print("Funcionalidades:")
+        print("- Reconocimiento facial con base de datos local")
+        print("- Lectura de códigos QR con API remota")
+        print("- Interfaz gráfica unificada")
+        print("- Registro de asistencia automático")
+        print("=" * 50)
+        
+        UnifiedAccessApp().run()
+    except Exception as e:
+        print(f"Error crítico en la aplicación: {e}")
+        sys.exit(1)
