@@ -37,10 +37,10 @@ Window.resizable = False
 
 # Configuración de la base de datos MySQL
 DB_CONFIG = {
-    'host': '10.0.3.54',
-    'user': 'mm',
-    'password': 'lwNduG0qcBu2RCJ7uRxk',
-    'database': 'registro_qr'
+    'host': '',
+    'user': '',
+    'password': '',
+    'database': ''
 }
 
 # Configuracion de la API para QR
