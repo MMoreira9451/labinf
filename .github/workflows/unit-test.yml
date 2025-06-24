@@ -1,0 +1,108 @@
+# .github/workflows/unit-tests.yml
+name: 🧪 Unit Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'back-end/**'
+      - 'tests/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'back-end/**'
+      - 'tests/**'
+  workflow_dispatch:  # Permite ejecutar manualmente
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: ['3.11']
+        service: ['ayudantes', 'estudiantes', 'lector']
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: 🔧 Install basic dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install unittest2 mock
+        
+        # Instalar dependencias mínimas necesarias para los tests
+        pip install Flask==2.3.3
+        pip install flask-cors==4.0.0
+        pip install PyMySQL==1.1.0
+        pip install python-dotenv==1.0.0
+        pip install pytz==2023.3
+        pip install cryptography==41.0.3
+        
+    - name: 🧪 Run tests for ${{ matrix.service }}
+      run: |
+        cd tests
+        python test_runner.py ${{ matrix.service }}
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        # Variables de entorno mock para que no fallen los imports
+        JWT_SECRET: 'test-secret-key'
+        MYSQL_HOST: 'localhost'
+        MYSQL_USER: 'test'
+        MYSQL_PASSWORD: 'test'
+        MYSQL_DB: 'test'
+        SECRET_KEY: 'test-secret'
+
+  all-tests:
+    name: Run All Tests Together
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: 🔧 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install unittest2 mock
+        pip install Flask==2.3.3 flask-cors==4.0.0
+        pip install PyMySQL==1.1.0 python-dotenv==1.0.0
+        pip install pytz==2023.3 cryptography==41.0.3
+        
+    - name: 🧪 Run all tests
+      run: |
+        cd tests
+        python test_runner.py
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        JWT_SECRET: 'test-secret-key'
+        MYSQL_HOST: 'localhost'
+        MYSQL_USER: 'test'
+        MYSQL_PASSWORD: 'test'
+        MYSQL_DB: 'test'
+        SECRET_KEY: 'test-secret'
+        
+    - name: 📊 Test Summary
+      if: always()
+      run: |
+        echo "## 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Unit tests executed for all services:" >> $GITHUB_STEP_SUMMARY
+        echo "- 🛠️ Ayudantes service" >> $GITHUB_STEP_SUMMARY
+        echo "- 👨‍🎓 Estudiantes service" >> $GITHUB_STEP_SUMMARY
+        echo "- 📱 Lector QR service" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🐍 Python version: 3.11" >> $GITHUB_STEP_SUMMARY
